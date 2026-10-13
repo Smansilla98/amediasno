@@ -2,7 +2,7 @@
 
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { customers, orderItems, orders, payments, products, stockMovements } from '@/lib/db/schema'
+import { customers, orderItems, orders, payments, products, stockMovements, expenses, cashAccounts, cashMovements } from '@/lib/db/schema'
 import { desc, eq } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
