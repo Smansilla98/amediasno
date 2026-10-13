@@ -5,7 +5,6 @@ import './globals.css'
 export const metadata: Metadata = {
   title: 'Medias · Gestión de pedidos',
   description: 'Sistema de pedidos, pagos, costos y márgenes para tu emprendimiento.',
-  generator: 'v0.app',
   icons: {
     icon: [
       {
@@ -26,11 +25,10 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
-  colorScheme: 'light dark',
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: 'white' },
-    { media: '(prefers-color-scheme: dark)', color: 'black' },
-  ],
+  // La interfaz es clara: sin esto el navegador oscurece controles nativos en modo oscuro.
+  colorScheme: 'light',
+  themeColor: '#ffffff',
+  viewportFit: 'cover',
 }
 
 export default function RootLayout({

@@ -1,163 +1,146 @@
 'use server'
 
-import { auth } from '@/lib/auth'
+import { and, eq, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { customers, orderItems, orders, payments, products, stockMovements, expenses, cashAccounts, cashMovements, productionBatches, batchOrders, stockReceipts } from '@/lib/db/schema'
-import { desc, eq } from 'drizzle-orm'
-import { headers } from 'next/headers'
-import { revalidatePath } from 'next/cache'
+import { cashMovements, customers, orderItems, orders, payments, products, stockMovements } from '@/lib/db/schema'
+import { ORDER_STATUS, PAYMENT_METHODS, paymentStatusFor, type OrderStatus } from '@/lib/domain'
+import { amount, clean, lockOrder, ownAccount, ownCustomer, required } from '@/lib/guards'
+import { run, UserError } from '@/lib/session'
+import { applyOrderStatus } from '@/lib/stock'
 
-export async function getUserId() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-  return session.user.id
+const method = (value?: string) => (PAYMENT_METHODS as readonly string[]).includes(value ?? '') ? value! : 'Efectivo'
+
+export type OrderInput = {
+  customerId?: string
+  newCustomer?: { name: string; phone?: string }
+  firstName?: string
+  lastName?: string
+  block?: string
+  professor?: string
+  venue?: string
+  deliveryDate?: string
+  notes?: string
+  items: { productId: string; size?: string; quantity: number; unitPriceCents?: number }[]
+  /** Sólo cuando el pedido no lleva productos del catálogo. */
+  manualTotalCents?: number
+  depositCents?: number
+  method?: string
+  accountId?: string
 }
 
-export async function listOrders() { const userId = await getUserId(); return db.select().from(orders).where(eq(orders.userId, userId)).orderBy(desc(orders.createdAt)) }
-export async function listCustomers() { const userId = await getUserId(); return db.select().from(customers).where(eq(customers.userId, userId)).orderBy(desc(customers.createdAt)) }
-export async function listProducts() { const userId = await getUserId(); return db.select().from(products).where(eq(products.userId, userId)).orderBy(desc(products.createdAt)) }
+export async function createOrder(input: OrderInput) {
+  return run(async (userId) => {
+    if (!input.customerId && !input.newCustomer?.name.trim()) throw new UserError('Elegí un cliente o cargá uno nuevo.')
+    if (input.accountId) await ownAccount(db, userId, input.accountId)
 
-export async function createProduct(input: { name: string; category: string; color?: string; costCents: number; priceCents: number; sizes: string[]; stock: number }) {
-  const userId = await getUserId()
-  if (!input.name.trim() || input.priceCents < 0 || input.costCents < 0 || input.stock < 0) throw new Error('Datos de producto inválidos')
-  const product = { id: crypto.randomUUID(), userId, name: input.name.trim(), category: input.category.trim() || 'General', color: input.color?.trim(), costCents: input.costCents, priceCents: input.priceCents, sizes: input.sizes, stock: input.stock, active: true }
-  await db.insert(products).values(product)
-  revalidatePath('/')
-  return product
+    return db.transaction(async (tx) => {
+      // Un pedido a la vez por cuenta: evita códigos repetidos si se cargan dos juntos.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${userId}))`)
+
+      const customer = input.customerId
+        ? await ownCustomer(tx, userId, input.customerId)
+        : (await tx.insert(customers).values({ id: crypto.randomUUID(), userId, name: input.newCustomer!.name.trim(), phone: clean(input.newCustomer!.phone) }).returning())[0]
+
+      const lines = []
+      for (const item of input.items) {
+        const [product] = await tx.select().from(products).where(and(eq(products.id, item.productId), eq(products.userId, userId)))
+        if (!product || !product.active) throw new UserError('Uno de los productos ya no está disponible.')
+        if (!Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 10_000) throw new UserError(`Revisá la cantidad de ${product.name}.`)
+        const unitPriceCents = amount(item.unitPriceCents ?? product.priceCents, `Revisá el precio de ${product.name}.`, { allowZero: true })
+        lines.push({ product, size: clean(item.size), quantity: item.quantity, unitPriceCents })
+      }
+      const totalCents = lines.length ? lines.reduce((sum, line) => sum + line.unitPriceCents * line.quantity, 0) : amount(input.manualTotalCents ?? 0, 'Agregá al menos un producto o un total.')
+      if (totalCents <= 0) throw new UserError('El total del pedido tiene que ser mayor a cero.')
+      const depositCents = amount(input.depositCents ?? 0, 'Revisá la seña.', { allowZero: true })
+      if (depositCents > totalCents) throw new UserError('La seña no puede ser mayor al total.')
+
+      const codes = await tx.select({ code: orders.code }).from(orders).where(eq(orders.userId, userId))
+      const last = codes.reduce((max, row) => Math.max(max, Number(/^PED-(\d+)$/.exec(row.code)?.[1] ?? 0)), 1000)
+      const [first, ...rest] = customer.name.split(' ')
+      const sizes = [...new Set(lines.map((line) => line.size).filter(Boolean))].join(', ')
+
+      const [order] = await tx.insert(orders).values({
+        id: crypto.randomUUID(), userId, customerId: customer.id, code: `PED-${last + 1}`,
+        status: 'pending', paymentStatus: paymentStatusFor(totalCents, depositCents),
+        totalCents, depositCents, paidCents: depositCents,
+        firstName: clean(input.firstName) ?? first, lastName: clean(input.lastName) ?? (clean(input.firstName) ? null : rest.join(' ') || null),
+        size: sizes || null, block: clean(input.block), professor: clean(input.professor), venue: clean(input.venue),
+        deliveryDate: clean(input.deliveryDate), notes: clean(input.notes),
+      }).returning()
+
+      for (const line of lines) {
+        await tx.insert(orderItems).values({ id: crypto.randomUUID(), orderId: order.id, productId: line.product.id, size: line.size, quantity: line.quantity, unitPriceCents: line.unitPriceCents, unitCostCents: line.product.costCents })
+        await tx.update(products).set({ requestedStock: sql`${products.requestedStock} + ${line.quantity}` }).where(eq(products.id, line.product.id))
+        await tx.insert(stockMovements).values({ id: crypto.randomUUID(), userId, productId: line.product.id, type: 'requested', quantity: line.quantity, notes: `Pedido ${order.code}` })
+      }
+      if (depositCents > 0) {
+        await tx.insert(payments).values({ id: crypto.randomUUID(), userId, orderId: order.id, amountCents: depositCents, method: method(input.method), notes: 'Seña' })
+        if (input.accountId) await tx.insert(cashMovements).values({ id: crypto.randomUUID(), userId, accountId: input.accountId, type: 'income', amountCents: depositCents, description: `Seña ${order.code}`, orderId: order.id })
+      }
+      return order
+    })
+  })
 }
 
-export async function createCustomer(input: { name: string; phone?: string; email?: string }) {
-  const userId = await getUserId()
-  if (!input.name.trim()) throw new Error('El nombre es obligatorio')
-  const customer = { id: crypto.randomUUID(), userId, name: input.name.trim(), phone: input.phone?.trim(), email: input.email?.trim() }
-  await db.insert(customers).values(customer)
-  revalidatePath('/')
-  return customer
+export async function updateOrder(input: { id: string; firstName?: string; lastName?: string; block?: string; professor?: string; venue?: string; deliveryDate?: string; notes?: string }) {
+  return run(async (userId) => db.transaction(async (tx) => {
+    await lockOrder(tx, userId, input.id)
+    await tx.update(orders).set({
+      firstName: required(input.firstName, 'Indicá para quién es el pedido.'), lastName: clean(input.lastName),
+      block: clean(input.block), professor: clean(input.professor), venue: clean(input.venue),
+      deliveryDate: clean(input.deliveryDate), notes: clean(input.notes),
+    }).where(eq(orders.id, input.id))
+    return undefined
+  }))
 }
 
-export async function createOrder(input: { customerId: string; code: string; totalCents: number; depositCents: number; firstName: string; lastName: string; size?: string; block?: string; professor?: string; venue?: string; notes?: string; deliveryDate?: string; productId?: string; quantity?: number }) {
-  const userId = await getUserId()
-  if (!input.customerId || !input.code.trim() || !input.firstName.trim() || !input.lastName.trim() || input.totalCents <= 0 || input.depositCents < 0 || input.depositCents > input.totalCents) throw new Error('Completá los datos del pedido y verificá la seña')
-  const quantity = input.quantity ?? 1
-  let product: typeof products.$inferSelect | undefined
-  if (input.productId) {
-    const [found] = await db.select().from(products).where(eq(products.id, input.productId))
-    if (!found || found.userId !== userId || !found.active) throw new Error('Producto inválido')
-    if (!Number.isInteger(quantity) || quantity < 1) throw new Error('Cantidad inválida')
-    product = found
-  }
-  const order = { id: crypto.randomUUID(), userId, customerId: input.customerId, code: input.code.trim(), firstName: input.firstName.trim(), lastName: input.lastName.trim(), size: input.size?.trim(), block: input.block?.trim(), professor: input.professor?.trim(), venue: input.venue?.trim(), totalCents: input.totalCents, depositCents: input.depositCents, paidCents: input.depositCents, notes: input.notes?.trim(), deliveryDate: input.deliveryDate, status: 'pending', paymentStatus: input.depositCents >= input.totalCents ? 'paid' : input.depositCents > 0 ? 'partial' : 'pending' }
-  await db.transaction(async (tx) => {
-    await tx.insert(orders).values(order)
-    if (product) {
-      await tx.insert(orderItems).values({ id: crypto.randomUUID(), orderId: order.id, productId: product.id, size: input.size, quantity, unitPriceCents: product.priceCents, unitCostCents: product.costCents })
-      await tx.update(products).set({ requestedStock: product.requestedStock + quantity }).where(eq(products.id, product.id))
-      await tx.insert(stockMovements).values({ id: crypto.randomUUID(), userId, productId: product.id, type: 'requested', quantity, notes: `Pedido ${order.code}` })
+export async function setOrderStatus(id: string, status: OrderStatus) {
+  return run(async (userId) => {
+    if (!(status in ORDER_STATUS)) throw new UserError('Estado inválido.')
+    return db.transaction(async (tx) => {
+      const order = await lockOrder(tx, userId, id)
+      if (order.status === 'cancelled' && status !== 'pending') throw new UserError('Para retomar un pedido cancelado, primero volvelo a "Tomado".')
+      await applyOrderStatus(tx, order, status)
+      return undefined
+    })
+  })
+}
+
+export async function recordPayment(input: { orderId: string; amountCents: number; method?: string; accountId?: string; notes?: string }) {
+  return run(async (userId) => {
+    const cents = amount(input.amountCents, 'Ingresá el importe del pago.')
+    if (input.accountId) {
+      const account = await ownAccount(db, userId, input.accountId)
+      if (!account.active) throw new UserError('Esa cuenta está archivada.')
     }
+    return db.transaction(async (tx) => {
+      const order = await lockOrder(tx, userId, input.orderId)
+      if (order.status === 'cancelled') throw new UserError('El pedido está cancelado.')
+      const balance = order.totalCents - order.paidCents
+      if (cents > balance) throw new UserError(balance > 0 ? `El saldo del pedido es menor al importe ingresado.` : 'Este pedido ya está pagado.')
+      const paid = order.paidCents + cents
+      await tx.insert(payments).values({ id: crypto.randomUUID(), userId, orderId: order.id, amountCents: cents, method: method(input.method), notes: clean(input.notes) })
+      await tx.update(orders).set({ paidCents: paid, paymentStatus: paymentStatusFor(order.totalCents, paid) }).where(eq(orders.id, order.id))
+      if (input.accountId) await tx.insert(cashMovements).values({ id: crypto.randomUUID(), userId, accountId: input.accountId, type: 'income', amountCents: cents, description: `Pago ${order.code}`, orderId: order.id })
+      return undefined
+    })
   })
-  revalidatePath('/')
-  return order
 }
 
-export async function recordPayment(input: { orderId: string; amountCents: number; method: string; accountId?: string; notes?: string }) {
-  const userId = await getUserId()
-  if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Monto inválido')
-  const [order] = await db.select().from(orders).where(eq(orders.id, input.orderId))
-  if (!order || order.userId !== userId || input.amountCents > order.totalCents - order.paidCents) throw new Error('Pago inválido')
-  const paid = order.paidCents + input.amountCents
-  let accountId = input.accountId
-  if (accountId) {
-    const [account] = await db.select().from(cashAccounts).where(eq(cashAccounts.id, accountId))
-    if (!account || account.userId !== userId || !account.active) throw new Error('Cuenta de caja inválida')
-  }
-  await db.transaction(async (tx) => {
-    await tx.insert(payments).values({ id: crypto.randomUUID(), userId, orderId: input.orderId, amountCents: input.amountCents, method: input.method, notes: input.notes })
-    await tx.update(orders).set({ paidCents: paid, paymentStatus: paid >= order.totalCents ? 'paid' : 'partial' }).where(eq(orders.id, input.orderId))
-    if (accountId) await tx.insert(cashMovements).values({ id: crypto.randomUUID(), userId, accountId, type: 'income', amountCents: input.amountCents, description: `Pago ${order.code}`, orderId: input.orderId })
-  })
-  revalidatePath('/')
-}
-
-export async function updateCustomer(input: { id: string; name: string; phone?: string; email?: string }) {
-  const userId = await getUserId()
-  if (!input.name.trim()) throw new Error('El nombre es obligatorio')
-  const [existing] = await db.select().from(customers).where(eq(customers.id, input.id))
-  if (!existing || existing.userId !== userId) throw new Error('Cliente no encontrado')
-  const [updated] = await db.update(customers).set({ name: input.name.trim(), phone: input.phone?.trim(), email: input.email?.trim() }).where(eq(customers.id, input.id)).returning()
-  revalidatePath('/')
-  return updated
-}
-
-export async function updateProduct(input: { id: string; name: string; category: string; color?: string; costCents: number; priceCents: number; sizes: string[] }) {
-  const userId = await getUserId()
-  if (!input.name.trim() || input.costCents < 0 || input.priceCents < 0) throw new Error('Datos de producto inválidos')
-  const [existing] = await db.select().from(products).where(eq(products.id, input.id))
-  if (!existing || existing.userId !== userId) throw new Error('Producto no encontrado')
-  const [updated] = await db.update(products).set({ name: input.name.trim(), category: input.category.trim() || 'General', color: input.color?.trim(), costCents: input.costCents, priceCents: input.priceCents, sizes: input.sizes }).where(eq(products.id, input.id)).returning()
-  revalidatePath('/')
-  return updated
-}
-
-export async function deactivateProduct(id: string) {
-  const userId = await getUserId()
-  const [existing] = await db.select().from(products).where(eq(products.id, id))
-  if (!existing || existing.userId !== userId) throw new Error('Producto no encontrado')
-  const [updated] = await db.update(products).set({ active: false }).where(eq(products.id, id)).returning()
-  revalidatePath('/')
-  return updated
-}
-
-export async function cancelOrder(id: string) {
-  const userId = await getUserId()
-  const [existing] = await db.select().from(orders).where(eq(orders.id, id))
-  if (!existing || existing.userId !== userId) throw new Error('Pedido no encontrado')
-  if (existing.status === 'delivered' || existing.status === 'cancelled') throw new Error('El pedido no puede cancelarse')
-  const [updated] = await db.update(orders).set({ status: 'cancelled' }).where(eq(orders.id, id)).returning()
-  revalidatePath('/')
-  return updated
-}
-
-export async function createProductionBatch(input: { supplierId: string; name: string; expectedAt?: string; notes?: string }) {
-  const userId = await getUserId()
-  if (!input.supplierId || !input.name.trim()) throw new Error('Proveedor y nombre son obligatorios')
-  const [batch] = await db.insert(productionBatches).values({ id: crypto.randomUUID(), userId, supplierId: input.supplierId, name: input.name.trim(), expectedAt: input.expectedAt, notes: input.notes?.trim() }).returning()
-  revalidatePath('/')
-  return batch
-}
-
-export async function assignOrderToBatch(input: { batchId: string; orderId: string }) {
-  const userId = await getUserId()
-  const [batch] = await db.select().from(productionBatches).where(eq(productionBatches.id, input.batchId))
-  const [order] = await db.select().from(orders).where(eq(orders.id, input.orderId))
-  if (!batch || batch.userId !== userId || !order || order.userId !== userId || order.status === 'cancelled') throw new Error('Tanda o pedido inválido')
-  const [assignment] = await db.insert(batchOrders).values({ id: crypto.randomUUID(), userId, batchId: input.batchId, orderId: input.orderId }).returning()
-  revalidatePath('/')
-  return assignment
-}
-
-export async function receiveStock(input: { batchId: string; productId: string; quantity: number; idempotencyKey: string; notes?: string }) {
-  const userId = await getUserId()
-  if (!Number.isInteger(input.quantity) || input.quantity <= 0 || !input.idempotencyKey.trim()) throw new Error('Recepción inválida')
-  const [batch] = await db.select().from(productionBatches).where(eq(productionBatches.id, input.batchId))
-  const [product] = await db.select().from(products).where(eq(products.id, input.productId))
-  if (!batch || batch.userId !== userId || !product || product.userId !== userId) throw new Error('Tanda o producto inválido')
-  const [existing] = await db.select().from(stockReceipts).where(eq(stockReceipts.idempotencyKey, input.idempotencyKey.trim()))
-  if (existing) return existing
-  const receipt = { id: crypto.randomUUID(), userId, batchId: input.batchId, idempotencyKey: input.idempotencyKey.trim(), notes: input.notes?.trim() }
-  await db.transaction(async (tx) => {
-    await tx.insert(stockReceipts).values(receipt)
-    await tx.update(products).set({ stock: product.stock + input.quantity, requestedStock: Math.max(0, product.requestedStock - input.quantity) }).where(eq(products.id, product.id))
-    await tx.insert(stockMovements).values({ id: crypto.randomUUID(), userId, productId: product.id, batchId: input.batchId, type: 'received', quantity: input.quantity, notes: input.notes?.trim() })
-    await tx.update(productionBatches).set({ status: 'received', receivedAt: new Date().toISOString().slice(0, 10) }).where(eq(productionBatches.id, input.batchId))
-  })
-  revalidatePath('/')
-  return receipt
-}
-
-export async function exportOrders(format: 'json' | 'csv') {
-  const userId = await getUserId()
-  const rows = await db.select().from(orders).where(eq(orders.userId, userId)).orderBy(desc(orders.createdAt))
-  if (format === 'json') return JSON.stringify(rows)
-  const headers = ['id','code','customerId','status','paymentStatus','totalCents','paidCents','deliveryDate','createdAt']
-  return [headers.join(','), ...rows.map((row) => headers.map((key) => JSON.stringify(row[key as keyof typeof row] ?? '')).join(','))].join('\n')
+/** Anula un pago cargado por error y devuelve el saldo al pedido. */
+export async function voidPayment(id: string) {
+  return run(async (userId) => db.transaction(async (tx) => {
+    const [payment] = await tx.select().from(payments).where(and(eq(payments.id, id), eq(payments.userId, userId)))
+    if (!payment) throw new UserError('No encontré ese pago.')
+    const order = await lockOrder(tx, userId, payment.orderId)
+    const paid = Math.max(0, order.paidCents - payment.amountCents)
+    await tx.delete(payments).where(eq(payments.id, id))
+    await tx.update(orders).set({ paidCents: paid, depositCents: Math.min(order.depositCents, paid), paymentStatus: paymentStatusFor(order.totalCents, paid) }).where(eq(orders.id, order.id))
+    // El pago no guarda en qué cuenta entró: se compensa el ingreso equivalente más reciente de ese pedido.
+    const [movement] = await tx.select().from(cashMovements)
+      .where(and(eq(cashMovements.userId, userId), eq(cashMovements.orderId, order.id), eq(cashMovements.type, 'income'), eq(cashMovements.amountCents, payment.amountCents)))
+      .orderBy(sql`${cashMovements.occurredAt} desc`).limit(1)
+    if (movement) await tx.delete(cashMovements).where(eq(cashMovements.id, movement.id))
+    return undefined
+  }))
 }

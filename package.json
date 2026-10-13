@@ -1,12 +1,15 @@
 {
-  "name": "my-project",
+  "name": "medias",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@12.3.4",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "db:dev": "node scripts/dev-db.mjs",
+    "db:setup": "node scripts/db-setup.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
@@ -34,6 +37,7 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "embedded-postgres": "18.4.0-beta.17",
     "postcss": "^8.5",
     "tailwindcss": "^4.3.3",
     "typescript": "5.7.3"
