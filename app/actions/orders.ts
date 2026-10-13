@@ -72,6 +72,45 @@ export async function recordPayment(input: { orderId: string; amountCents: numbe
   revalidatePath('/')
 }
 
+export async function updateCustomer(input: { id: string; name: string; phone?: string; email?: string }) {
+  const userId = await getUserId()
+  if (!input.name.trim()) throw new Error('El nombre es obligatorio')
+  const [existing] = await db.select().from(customers).where(eq(customers.id, input.id))
+  if (!existing || existing.userId !== userId) throw new Error('Cliente no encontrado')
+  const [updated] = await db.update(customers).set({ name: input.name.trim(), phone: input.phone?.trim(), email: input.email?.trim() }).where(eq(customers.id, input.id)).returning()
+  revalidatePath('/')
+  return updated
+}
+
+export async function updateProduct(input: { id: string; name: string; category: string; color?: string; costCents: number; priceCents: number; sizes: string[] }) {
+  const userId = await getUserId()
+  if (!input.name.trim() || input.costCents < 0 || input.priceCents < 0) throw new Error('Datos de producto inválidos')
+  const [existing] = await db.select().from(products).where(eq(products.id, input.id))
+  if (!existing || existing.userId !== userId) throw new Error('Producto no encontrado')
+  const [updated] = await db.update(products).set({ name: input.name.trim(), category: input.category.trim() || 'General', color: input.color?.trim(), costCents: input.costCents, priceCents: input.priceCents, sizes: input.sizes }).where(eq(products.id, input.id)).returning()
+  revalidatePath('/')
+  return updated
+}
+
+export async function deactivateProduct(id: string) {
+  const userId = await getUserId()
+  const [existing] = await db.select().from(products).where(eq(products.id, id))
+  if (!existing || existing.userId !== userId) throw new Error('Producto no encontrado')
+  const [updated] = await db.update(products).set({ active: false }).where(eq(products.id, id)).returning()
+  revalidatePath('/')
+  return updated
+}
+
+export async function cancelOrder(id: string) {
+  const userId = await getUserId()
+  const [existing] = await db.select().from(orders).where(eq(orders.id, id))
+  if (!existing || existing.userId !== userId) throw new Error('Pedido no encontrado')
+  if (existing.status === 'delivered' || existing.status === 'cancelled') throw new Error('El pedido no puede cancelarse')
+  const [updated] = await db.update(orders).set({ status: 'cancelled' }).where(eq(orders.id, id)).returning()
+  revalidatePath('/')
+  return updated
+}
+
 export async function exportOrders(format: 'json' | 'csv') {
   const userId = await getUserId()
   const rows = await db.select().from(orders).where(eq(orders.userId, userId)).orderBy(desc(orders.createdAt))

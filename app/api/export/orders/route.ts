@@ -2,18 +2,15 @@ import { NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { orders } from '@/lib/db/schema'
-import { eq } from 'drizzle-orm'
-import { headers } from 'next/headers'
+import { desc, eq } from 'drizzle-orm'
 
 export async function GET(request: Request) {
-  const session = await auth.api.getSession({ headers: await headers() })
+  const session = await auth.api.getSession({ headers: new Headers(request.headers) })
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  const rows = await db.select().from(orders).where(eq(orders.userId, session.user.id))
-  const format = new URL(request.url).searchParams.get('format') || 'json'
-  if (format === 'csv') {
-    const header = 'id,code,status,payment_status,total_cents,paid_cents,created_at'
-    const body = rows.map((row) => [row.id, row.code, row.status, row.paymentStatus, row.totalCents, row.paidCents, row.createdAt.toISOString()].map((value) => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\n')
-    return new NextResponse(`${header}\n${body}`, { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="pedidos.csv"' } })
-  }
-  return NextResponse.json(rows, { headers: { 'Content-Disposition': 'attachment; filename="pedidos.json"' } })
+  const format = new URL(request.url).searchParams.get('format') === 'json' ? 'json' : 'csv'
+  const rows = await db.select().from(orders).where(eq(orders.userId, session.user.id)).orderBy(desc(orders.createdAt))
+  if (format === 'json') return new NextResponse(JSON.stringify(rows), { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': 'attachment; filename="pedidos.json"' } })
+  const fields = ['code','firstName','lastName','size','block','professor','venue','status','paymentStatus','totalCents','paidCents','deliveryDate'] as const
+  const csv = [fields.join(','), ...rows.map((row) => fields.map((field) => JSON.stringify(row[field] ?? '')).join(','))].join('\n')
+  return new NextResponse(csv, { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="pedidos.csv"' } })
 }
