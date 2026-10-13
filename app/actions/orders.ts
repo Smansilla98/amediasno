@@ -35,11 +35,19 @@ export async function createCustomer(input: { name: string; phone?: string; emai
   return customer
 }
 
-export async function createOrder(input: { customerId: string; code: string; totalCents: number; notes?: string; deliveryDate?: string }) {
+export async function createOrder(input: { customerId: string; code: string; totalCents: number; notes?: string; deliveryDate?: string; productId?: string; size?: string; quantity?: number }) {
   const userId = await getUserId()
   if (!input.customerId || !input.code.trim() || input.totalCents <= 0) throw new Error('Completá los datos del pedido')
   const order = { id: crypto.randomUUID(), userId, customerId: input.customerId, code: input.code.trim(), totalCents: input.totalCents, notes: input.notes?.trim(), deliveryDate: input.deliveryDate, status: 'pending', paymentStatus: 'pending', paidCents: 0 }
   await db.insert(orders).values(order)
+  if (input.productId) {
+    const [product] = await db.select().from(products).where(eq(products.id, input.productId))
+    if (!product || product.userId !== userId) throw new Error('Producto inválido')
+    const quantity = input.quantity ?? 1
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > product.stock) throw new Error('Stock insuficiente')
+    await db.insert(orderItems).values({ id: crypto.randomUUID(), orderId: order.id, productId: product.id, size: input.size, quantity, unitPriceCents: product.priceCents, unitCostCents: product.costCents })
+    await db.update(products).set({ stock: product.stock - quantity }).where(eq(products.id, product.id))
+  }
   revalidatePath('/')
   return order
 }
