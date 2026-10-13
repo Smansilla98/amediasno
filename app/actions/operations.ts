@@ -19,6 +19,14 @@ export async function createSupplier(input: { name: string; categories: string[]
   return supplier
 }
 
+export async function createProductionBatch(input: { supplierId: string; name: string; expectedAt?: string; notes?: string }) {
+  const userId = await getUserId()
+  if (!input.supplierId || !input.name.trim()) throw new Error('Proveedor y nombre son obligatorios')
+  const [batch] = await db.insert(productionBatches).values({ id: crypto.randomUUID(), userId, supplierId: input.supplierId, name: input.name.trim(), expectedAt: input.expectedAt, notes: input.notes?.trim() }).returning()
+  revalidatePath('/')
+  return batch
+}
+
 export async function listBatches() {
   const userId = await getUserId()
   return db.select().from(productionBatches).where(eq(productionBatches.userId, userId))
