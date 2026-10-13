@@ -38,17 +38,23 @@ export async function createCustomer(input: { name: string; phone?: string; emai
 export async function createOrder(input: { customerId: string; code: string; totalCents: number; depositCents: number; firstName: string; lastName: string; size?: string; block?: string; professor?: string; venue?: string; notes?: string; deliveryDate?: string; productId?: string; quantity?: number }) {
   const userId = await getUserId()
   if (!input.customerId || !input.code.trim() || !input.firstName.trim() || !input.lastName.trim() || input.totalCents <= 0 || input.depositCents < 0 || input.depositCents > input.totalCents) throw new Error('Completá los datos del pedido y verificá la seña')
-  const order = { id: crypto.randomUUID(), userId, customerId: input.customerId, code: input.code.trim(), firstName: input.firstName.trim(), lastName: input.lastName.trim(), size: input.size?.trim(), block: input.block?.trim(), professor: input.professor?.trim(), venue: input.venue?.trim(), totalCents: input.totalCents, depositCents: input.depositCents, paidCents: input.depositCents, notes: input.notes?.trim(), deliveryDate: input.deliveryDate, status: 'pending', paymentStatus: input.depositCents >= input.totalCents ? 'paid' : input.depositCents > 0 ? 'partial' : 'pending' }
-  await db.insert(orders).values(order)
+  const quantity = input.quantity ?? 1
+  let product: typeof products.$inferSelect | undefined
   if (input.productId) {
-    const [product] = await db.select().from(products).where(eq(products.id, input.productId))
-    if (!product || product.userId !== userId) throw new Error('Producto inválido')
-    const quantity = input.quantity ?? 1
-    if (!Number.isInteger(quantity) || quantity < 1 || quantity > product.stock) throw new Error('Stock insuficiente')
-    await db.insert(orderItems).values({ id: crypto.randomUUID(), orderId: order.id, productId: product.id, size: input.size, quantity, unitPriceCents: product.priceCents, unitCostCents: product.costCents })
-    await db.update(products).set({ requestedStock: product.requestedStock + quantity }).where(eq(products.id, product.id))
-    await db.insert(stockMovements).values({ id: crypto.randomUUID(), userId, productId: product.id, type: 'requested', quantity, notes: `Pedido ${order.code}` })
+    const [found] = await db.select().from(products).where(eq(products.id, input.productId))
+    if (!found || found.userId !== userId || !found.active) throw new Error('Producto inválido')
+    if (!Number.isInteger(quantity) || quantity < 1) throw new Error('Cantidad inválida')
+    product = found
   }
+  const order = { id: crypto.randomUUID(), userId, customerId: input.customerId, code: input.code.trim(), firstName: input.firstName.trim(), lastName: input.lastName.trim(), size: input.size?.trim(), block: input.block?.trim(), professor: input.professor?.trim(), venue: input.venue?.trim(), totalCents: input.totalCents, depositCents: input.depositCents, paidCents: input.depositCents, notes: input.notes?.trim(), deliveryDate: input.deliveryDate, status: 'pending', paymentStatus: input.depositCents >= input.totalCents ? 'paid' : input.depositCents > 0 ? 'partial' : 'pending' }
+  await db.transaction(async (tx) => {
+    await tx.insert(orders).values(order)
+    if (product) {
+      await tx.insert(orderItems).values({ id: crypto.randomUUID(), orderId: order.id, productId: product.id, size: input.size, quantity, unitPriceCents: product.priceCents, unitCostCents: product.costCents })
+      await tx.update(products).set({ requestedStock: product.requestedStock + quantity }).where(eq(products.id, product.id))
+      await tx.insert(stockMovements).values({ id: crypto.randomUUID(), userId, productId: product.id, type: 'requested', quantity, notes: `Pedido ${order.code}` })
+    }
+  })
   revalidatePath('/')
   return order
 }
@@ -59,8 +65,10 @@ export async function recordPayment(input: { orderId: string; amountCents: numbe
   const [order] = await db.select().from(orders).where(eq(orders.id, input.orderId))
   if (!order || order.userId !== userId || input.amountCents > order.totalCents - order.paidCents) throw new Error('Pago inválido')
   const paid = order.paidCents + input.amountCents
-  await db.insert(payments).values({ id: crypto.randomUUID(), userId, orderId: input.orderId, amountCents: input.amountCents, method: input.method, notes: input.notes })
-  await db.update(orders).set({ paidCents: paid, paymentStatus: paid >= order.totalCents ? 'paid' : 'partial' }).where(eq(orders.id, input.orderId))
+  await db.transaction(async (tx) => {
+    await tx.insert(payments).values({ id: crypto.randomUUID(), userId, orderId: input.orderId, amountCents: input.amountCents, method: input.method, notes: input.notes })
+    await tx.update(orders).set({ paidCents: paid, paymentStatus: paid >= order.totalCents ? 'paid' : 'partial' }).where(eq(orders.id, input.orderId))
+  })
   revalidatePath('/')
 }
 
