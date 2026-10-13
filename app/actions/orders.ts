@@ -2,7 +2,7 @@
 
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { customers, orderItems, orders, payments, products, stockMovements, expenses, cashAccounts, cashMovements } from '@/lib/db/schema'
+import { customers, orderItems, orders, payments, products, stockMovements, expenses, cashAccounts, cashMovements, productionBatches, batchOrders, stockReceipts } from '@/lib/db/schema'
 import { desc, eq } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
@@ -59,15 +59,21 @@ export async function createOrder(input: { customerId: string; code: string; tot
   return order
 }
 
-export async function recordPayment(input: { orderId: string; amountCents: number; method: string; notes?: string }) {
+export async function recordPayment(input: { orderId: string; amountCents: number; method: string; accountId?: string; notes?: string }) {
   const userId = await getUserId()
   if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Monto inválido')
   const [order] = await db.select().from(orders).where(eq(orders.id, input.orderId))
   if (!order || order.userId !== userId || input.amountCents > order.totalCents - order.paidCents) throw new Error('Pago inválido')
   const paid = order.paidCents + input.amountCents
+  let accountId = input.accountId
+  if (accountId) {
+    const [account] = await db.select().from(cashAccounts).where(eq(cashAccounts.id, accountId))
+    if (!account || account.userId !== userId || !account.active) throw new Error('Cuenta de caja inválida')
+  }
   await db.transaction(async (tx) => {
     await tx.insert(payments).values({ id: crypto.randomUUID(), userId, orderId: input.orderId, amountCents: input.amountCents, method: input.method, notes: input.notes })
     await tx.update(orders).set({ paidCents: paid, paymentStatus: paid >= order.totalCents ? 'paid' : 'partial' }).where(eq(orders.id, input.orderId))
+    if (accountId) await tx.insert(cashMovements).values({ id: crypto.randomUUID(), userId, accountId, type: 'income', amountCents: input.amountCents, description: `Pago ${order.code}`, orderId: input.orderId })
   })
   revalidatePath('/')
 }
@@ -109,6 +115,43 @@ export async function cancelOrder(id: string) {
   const [updated] = await db.update(orders).set({ status: 'cancelled' }).where(eq(orders.id, id)).returning()
   revalidatePath('/')
   return updated
+}
+
+export async function createProductionBatch(input: { supplierId: string; name: string; expectedAt?: string; notes?: string }) {
+  const userId = await getUserId()
+  if (!input.supplierId || !input.name.trim()) throw new Error('Proveedor y nombre son obligatorios')
+  const [batch] = await db.insert(productionBatches).values({ id: crypto.randomUUID(), userId, supplierId: input.supplierId, name: input.name.trim(), expectedAt: input.expectedAt, notes: input.notes?.trim() }).returning()
+  revalidatePath('/')
+  return batch
+}
+
+export async function assignOrderToBatch(input: { batchId: string; orderId: string }) {
+  const userId = await getUserId()
+  const [batch] = await db.select().from(productionBatches).where(eq(productionBatches.id, input.batchId))
+  const [order] = await db.select().from(orders).where(eq(orders.id, input.orderId))
+  if (!batch || batch.userId !== userId || !order || order.userId !== userId || order.status === 'cancelled') throw new Error('Tanda o pedido inválido')
+  const [assignment] = await db.insert(batchOrders).values({ id: crypto.randomUUID(), userId, batchId: input.batchId, orderId: input.orderId }).returning()
+  revalidatePath('/')
+  return assignment
+}
+
+export async function receiveStock(input: { batchId: string; productId: string; quantity: number; idempotencyKey: string; notes?: string }) {
+  const userId = await getUserId()
+  if (!Number.isInteger(input.quantity) || input.quantity <= 0 || !input.idempotencyKey.trim()) throw new Error('Recepción inválida')
+  const [batch] = await db.select().from(productionBatches).where(eq(productionBatches.id, input.batchId))
+  const [product] = await db.select().from(products).where(eq(products.id, input.productId))
+  if (!batch || batch.userId !== userId || !product || product.userId !== userId) throw new Error('Tanda o producto inválido')
+  const [existing] = await db.select().from(stockReceipts).where(eq(stockReceipts.idempotencyKey, input.idempotencyKey.trim()))
+  if (existing) return existing
+  const receipt = { id: crypto.randomUUID(), userId, batchId: input.batchId, idempotencyKey: input.idempotencyKey.trim(), notes: input.notes?.trim() }
+  await db.transaction(async (tx) => {
+    await tx.insert(stockReceipts).values(receipt)
+    await tx.update(products).set({ stock: product.stock + input.quantity, requestedStock: Math.max(0, product.requestedStock - input.quantity) }).where(eq(products.id, product.id))
+    await tx.insert(stockMovements).values({ id: crypto.randomUUID(), userId, productId: product.id, batchId: input.batchId, type: 'received', quantity: input.quantity, notes: input.notes?.trim() })
+    await tx.update(productionBatches).set({ status: 'received', receivedAt: new Date().toISOString().slice(0, 10) }).where(eq(productionBatches.id, input.batchId))
+  })
+  revalidatePath('/')
+  return receipt
 }
 
 export async function exportOrders(format: 'json' | 'csv') {
