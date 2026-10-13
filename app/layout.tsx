@@ -3,7 +3,7 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Medias · Gestión de pedidos',
+  title: 'A medias No · Gestión de pedidos',
   description: 'Sistema de pedidos, pagos, costos y márgenes para tu emprendimiento.',
   icons: {
     icon: [

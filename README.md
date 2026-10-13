@@ -1,4 +1,4 @@
-# Medias · gestión de pedidos
+# A medias No · gestión de pedidos
 
 Pedidos, pagos, stock, tandas de fábrica y caja para un emprendimiento que vende por encargo.
 

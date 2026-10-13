@@ -76,3 +76,6 @@ export const todayISO = () => new Intl.DateTimeFormat('en-CA', { timeZone: TZ })
 export const monthKey = (value: Date | string) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit' }).format(new Date(value)).slice(0, 7)
 
 export const fullName = (first?: string | null, last?: string | null) => `${first ?? ''} ${last ?? ''}`.trim()
+
+/** Nombre del emprendimiento, tal como se muestra. */
+export const BRAND = 'A medias No'

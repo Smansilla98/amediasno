@@ -11,6 +11,7 @@ import { Catalog, Customers, Orders, Overview } from '@/components/app/sections/
 import { AppProvider, useApp, type ModalState } from '@/components/app/store'
 import { ActionMenu, Button } from '@/components/ui/controls'
 import { ConfirmModal, Modal } from '@/components/ui/modal'
+import { BRAND } from '@/lib/domain'
 import { cn } from '@/lib/utils'
 
 type Section = { id: string; label: string; icon: LucideIcon; group: string; view: () => React.ReactNode; exports?: string }
@@ -67,7 +68,7 @@ function Shell() {
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-slate-200 bg-white lg:flex">
         <div className="flex h-[68px] shrink-0 items-center gap-3 border-b border-slate-100 px-5">
           <Image src="/medias-logo.jpg" alt="" width={38} height={38} className="rounded-full object-cover" />
-          <div><p className="text-[15px] font-bold leading-tight tracking-tight">Medias</p><p className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-400">Gestión de pedidos</p></div>
+          <div><p className="text-[15px] font-bold leading-tight tracking-tight">{BRAND}</p><p className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-400">Gestión de pedidos</p></div>
         </div>
         <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-4" aria-label="Secciones">
           {groups.map((group) => <div key={group}><p className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{group}</p><div className="space-y-0.5">{SECTIONS.filter((item) => item.group === group).map(navButton)}</div></div>)}

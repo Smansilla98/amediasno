@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import * as XLSX from 'xlsx'
 import PDFDocument from 'pdfkit'
 import { getWorkspace, type Workspace } from '@/app/actions/workspace'
-import { BATCH_STATUS, EXPENSE_CATEGORIES, ORDER_STATUS, PAYMENT_STATUS, formatDate, fullName, labelOf, money } from '@/lib/domain'
+import { BRAND, BATCH_STATUS, EXPENSE_CATEGORIES, ORDER_STATUS, PAYMENT_STATUS, formatDate, fullName, labelOf, money } from '@/lib/domain'
 import { getSessionUser } from '@/lib/session'
 
 type Cell = string | number
@@ -59,7 +59,7 @@ function pdf(sheet: Sheet) {
     doc.moveTo(32, y + 13).lineTo(32 + width, y + 13).strokeColor('#cbd5e1').stroke()
     doc.y = y + 19
   }
-  doc.font('Helvetica-Bold').fontSize(16).fillColor('#0f172a').text(`${sheet.title} · Medias`)
+  doc.font('Helvetica-Bold').fontSize(16).fillColor('#0f172a').text(`${sheet.title} · ${BRAND}`)
   doc.font('Helvetica').fontSize(9).fillColor('#64748b').text(`Generado el ${formatDate(new Date())} · ${sheet.rows.length} filas`).moveDown()
   header()
   if (!sheet.rows.length) doc.font('Helvetica').fontSize(10).fillColor('#64748b').text('No hay datos para exportar.', 32)
