@@ -2,7 +2,7 @@
 
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { customers, orderItems, orders, payments, products } from '@/lib/db/schema'
+import { customers, orderItems, orders, payments, products, stockMovements } from '@/lib/db/schema'
 import { desc, eq } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
@@ -35,10 +35,10 @@ export async function createCustomer(input: { name: string; phone?: string; emai
   return customer
 }
 
-export async function createOrder(input: { customerId: string; code: string; totalCents: number; notes?: string; deliveryDate?: string; productId?: string; size?: string; quantity?: number }) {
+export async function createOrder(input: { customerId: string; code: string; totalCents: number; depositCents: number; firstName: string; lastName: string; size?: string; block?: string; professor?: string; venue?: string; notes?: string; deliveryDate?: string; productId?: string; quantity?: number }) {
   const userId = await getUserId()
-  if (!input.customerId || !input.code.trim() || input.totalCents <= 0) throw new Error('Completá los datos del pedido')
-  const order = { id: crypto.randomUUID(), userId, customerId: input.customerId, code: input.code.trim(), totalCents: input.totalCents, notes: input.notes?.trim(), deliveryDate: input.deliveryDate, status: 'pending', paymentStatus: 'pending', paidCents: 0 }
+  if (!input.customerId || !input.code.trim() || !input.firstName.trim() || !input.lastName.trim() || input.totalCents <= 0 || input.depositCents < 0 || input.depositCents > input.totalCents) throw new Error('Completá los datos del pedido y verificá la seña')
+  const order = { id: crypto.randomUUID(), userId, customerId: input.customerId, code: input.code.trim(), firstName: input.firstName.trim(), lastName: input.lastName.trim(), size: input.size?.trim(), block: input.block?.trim(), professor: input.professor?.trim(), venue: input.venue?.trim(), totalCents: input.totalCents, depositCents: input.depositCents, paidCents: input.depositCents, notes: input.notes?.trim(), deliveryDate: input.deliveryDate, status: 'pending', paymentStatus: input.depositCents >= input.totalCents ? 'paid' : input.depositCents > 0 ? 'partial' : 'pending' }
   await db.insert(orders).values(order)
   if (input.productId) {
     const [product] = await db.select().from(products).where(eq(products.id, input.productId))
@@ -46,7 +46,8 @@ export async function createOrder(input: { customerId: string; code: string; tot
     const quantity = input.quantity ?? 1
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > product.stock) throw new Error('Stock insuficiente')
     await db.insert(orderItems).values({ id: crypto.randomUUID(), orderId: order.id, productId: product.id, size: input.size, quantity, unitPriceCents: product.priceCents, unitCostCents: product.costCents })
-    await db.update(products).set({ stock: product.stock - quantity }).where(eq(products.id, product.id))
+    await db.update(products).set({ requestedStock: product.requestedStock + quantity }).where(eq(products.id, product.id))
+    await db.insert(stockMovements).values({ id: crypto.randomUUID(), userId, productId: product.id, type: 'requested', quantity, notes: `Pedido ${order.code}` })
   }
   revalidatePath('/')
   return order
