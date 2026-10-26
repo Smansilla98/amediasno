@@ -8,6 +8,7 @@ import { OrderBadge, PaymentBadge } from '@/components/app/parts'
 import { ActionMenu, Button, Field, FormSection, Input, MoneyInput, Select, Textarea } from '@/components/ui/controls'
 import { FormModal, Modal } from '@/components/ui/modal'
 import { ORDER_FLOW, ORDER_STATUS, PAYMENT_METHODS, formatDate, hasChart, money, toCents, todayISO, type OrderStatus } from '@/lib/domain'
+import { whatsappUrl } from '@/lib/whatsapp'
 import { cn } from '@/lib/utils'
 
 const text = (form: FormData, key: string) => String(form.get(key) ?? '').trim()
@@ -21,6 +22,7 @@ export function OrderForm() {
   const [lines, setLines] = useState<Line[]>(products.length ? [{ key: 1, productId: '', size: '', quantity: '1', price: '' }] : [])
   const [manualTotal, setManualTotal] = useState('')
   const [deposit, setDeposit] = useState('')
+  const [fulfillment, setFulfillment] = useState<'pending' | 'ready' | 'delivered'>('pending')
 
   const patch = (key: number, change: Partial<Line>) => setLines((list) => list.map((line) => line.key === key ? { ...line, ...change } : line))
   const filled = lines.filter((line) => line.productId)
@@ -32,6 +34,7 @@ export function OrderForm() {
       open onClose={close} size="lg" icon={ShoppingBag} title="Nuevo pedido" description="El código se asigna solo al guardar." submitLabel="Guardar pedido"
       summary={<span className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 tabular-nums"><span>Total <strong className="text-base text-slate-950">{money(totalCents)}</strong></span>{depositCents > 0 && <span className="text-slate-500">Saldo {money(Math.max(0, totalCents - depositCents))}</span>}</span>}
       onSubmit={(form) => submit(createOrder({
+        fulfillment,
         customerId: newCustomer ? undefined : text(form, 'customerId') || undefined,
         newCustomer: newCustomer ? { name: text(form, 'customerName'), phone: text(form, 'customerPhone') } : undefined,
         firstName: text(form, 'firstName'), lastName: text(form, 'lastName'), block: text(form, 'block'), professor: text(form, 'professor'), venue: text(form, 'venue'),
@@ -73,7 +76,7 @@ export function OrderForm() {
                       </Select>
                     </Field>
                     <Field label="Talle" className={cn(index > 0 && 'sm:[&>span]:sr-only')}>
-                      {product?.sizes.length ? <Select value={line.size} onChange={(event) => patch(line.key, { size: event.target.value })}><option value="">—</option>{product.sizes.map((size) => <option key={size}>{size}</option>)}</Select> : <Input value={line.size} onChange={(event) => patch(line.key, { size: event.target.value })} placeholder="—" />}
+                      {product?.sizes.length ? <Select required value={line.size} onChange={(event) => patch(line.key, { size: event.target.value })}><option value="">Elegí talle…</option>{product.sizes.map((size) => <option key={size}>{size}</option>)}</Select> : <Input value={line.size} onChange={(event) => patch(line.key, { size: event.target.value })} placeholder="—" />}
                     </Field>
                     <Field label="Cant." className={cn(index > 0 && 'sm:[&>span]:sr-only')}><Input type="number" inputMode="numeric" min={1} value={line.quantity} onChange={(event) => patch(line.key, { quantity: event.target.value })} className="tabular-nums" /></Field>
                     <Field label="Precio c/u" className={cn('col-span-1', index > 0 && 'sm:[&>span]:sr-only')}><MoneyInput value={line.price} onChange={(event) => patch(line.key, { price: event.target.value })} /></Field>
@@ -86,6 +89,17 @@ export function OrderForm() {
             </div>
           )}
         </section>
+
+        <FormSection title="Cómo se entrega">
+          <Field label="Abastecimiento" className="sm:col-span-2" hint="Tomar un pedido no lo envía a fábrica. El stock se valida al guardar; reservar no descuenta unidades físicas hasta la entrega.">
+            <Select value={fulfillment} onChange={(event) => setFulfillment(event.target.value as typeof fulfillment)}>
+              <option value="pending">Tomar pedido · decidir más adelante</option>
+              <option value="ready" disabled={!filled.length}>Reservar stock · listo para entregar</option>
+              <option value="delivered" disabled={!filled.length}>Entregar ahora desde stock</option>
+            </Select>
+          </Field>
+          {filled.map((line) => <p key={line.key} className="text-xs text-slate-600">{view.productById.get(line.productId)?.name} {line.size} · disponibles: {Math.max(0, view.availableFor(line.productId, line.size || null))} u.</p>)}
+        </FormSection>
 
         <FormSection title="Seña">
           <Field label="Seña recibida" optional><MoneyInput name="deposit" value={deposit} onChange={(event) => setDeposit(event.target.value)} /></Field>
@@ -159,7 +173,8 @@ export function OrderDetail({ id }: { id: string }) {
   if (!order) return null
 
   const cancelled = order.status === 'cancelled'
-  const step = ORDER_FLOW.indexOf(order.status as OrderStatus)
+  const flow: OrderStatus[] = order.batch || order.status === 'in_production' ? ORDER_FLOW : ['pending', 'ready', 'delivered']
+  const step = flow.indexOf(order.status as OrderStatus)
   const paidPct = order.totalCents > 0 ? Math.min(100, Math.round((order.paidCents / order.totalCents) * 100)) : 0
   const change = async (status: OrderStatus, message: string) => {
     setBusy(true)
@@ -167,8 +182,9 @@ export function OrderDetail({ id }: { id: string }) {
     setBusy(false)
     if (error) notify(error, true)
   }
-  const whatsapp = order.customerPhone ? `https://wa.me/${order.customerPhone.replace(/\D/g, '').replace(/^(?!54)/, '54')}` : null
-  const next = ORDER_FLOW[step + 1]
+  const whatsapp = whatsappUrl(order.customerPhone, `Hola ${order.customerName}, te escribo por tu pedido ${order.code}.`)
+  const hasStock = view.canFulfill(order)
+  const next = order.status === 'ready' ? 'delivered' : undefined
   const details: [string, string | null][] = [['Para', order.recipient || null], ['Bloque', order.block], ['Profesor/a', order.professor], ['Sede', order.venue], ['Entrega', order.deliveryDate ? formatDate(order.deliveryDate) : null], ['Tanda', order.batch?.name ?? null], ['Cargado', formatDate(order.createdAt)]]
 
   return (
@@ -178,25 +194,31 @@ export function OrderDetail({ id }: { id: string }) {
         <div className="mr-auto">
           <ActionMenu align="start" trigger={<Button variant="ghost" aria-label="Más acciones" className="px-3"><MoreHorizontal className="size-5 sm:hidden" /><span className="hidden sm:inline">Más acciones</span></Button>} actions={[
             { label: 'Editar datos', icon: Pencil, onSelect: () => open({ type: 'orderEdit', id }) },
-            { label: 'Volver un paso atrás', icon: Undo2, hidden: cancelled || step <= 0, onSelect: () => change(ORDER_FLOW[step - 1], `Volvió a "${ORDER_STATUS[ORDER_FLOW[step - 1]]}"`) },
+            { label: 'Volver un paso atrás', icon: Undo2, hidden: cancelled || step <= 0 || order.status === 'in_production', onSelect: () => change(order.status === 'ready' ? 'pending' : flow[step - 1], order.status === 'ready' ? 'Reserva liberada: pedido tomado' : `Volvió a "${ORDER_STATUS[flow[step - 1]]}"`) },
             { label: 'Retomar pedido', icon: RotateCcw, hidden: !cancelled, onSelect: () => change('pending', 'Pedido retomado') },
             { label: 'Cancelar pedido', icon: Ban, danger: true, hidden: cancelled, onSelect: () => open({ type: 'confirm', title: `¿Cancelar ${order.code}?`, confirmLabel: 'Cancelar pedido', danger: true, body: <>El pedido deja de contar en ventas y en lo solicitado a fábrica.{order.paidCents > 0 && <> Los <strong>{money(order.paidCents)}</strong> ya cobrados quedan registrados: si los devolvés, anulá esos pagos.</>}</>, run: async () => { const error = await submit(setOrderStatus(id, 'cancelled'), 'Pedido cancelado'); if (error) notify(error, true); return !error } }) },
           ]} />
         </div>
         {!cancelled && order.balanceCents > 0 && <Button variant={next ? 'secondary' : 'primary'} className="px-3 sm:px-4" onClick={() => open({ type: 'payment', orderId: id })}><WalletCards className="hidden size-4 sm:block" /> Registrar pago</Button>}
-        {!cancelled && next && <Button disabled={busy} className="flex-1 px-3 sm:flex-none sm:px-4" onClick={() => change(next, `Pedido ${ORDER_STATUS[next].toLowerCase()}`)}>{next === 'in_production' ? <Factory className="size-4" /> : <Check className="size-4" />}{next === 'in_production' ? 'Pasar a fábrica' : next === 'ready' ? 'Marcar listo' : 'Marcar entregado'}</Button>}
+        {order.status === 'pending' && (!order.batch || order.batch.status === 'received') && <Button variant="secondary" onClick={() => open({ type: 'batch' })}><Factory className="size-4" /> Elegir en tanda</Button>}
+        {order.status === 'pending' && (hasStock || !order.items.length) && <Button variant="secondary" disabled={busy} onClick={() => change('ready', 'Stock reservado: listo para entregar')}>{order.items.length ? 'Reservar stock' : 'Marcar listo'}</Button>}
+        {order.status === 'pending' && hasStock && <Button variant="success" disabled={busy} onClick={() => change('delivered', 'Pedido entregado desde stock')}><Check className="size-4" /> Entregar ahora</Button>}
+        {!cancelled && next && <Button disabled={busy || (order.items.length > 0 && !hasStock)} className="flex-1 px-3 sm:flex-none sm:px-4" onClick={() => change(next, `Pedido ${ORDER_STATUS[next].toLowerCase()}`)}><Check className="size-4" />Marcar entregado</Button>}
       </>}>
       <div className="space-y-6">
         {!cancelled && (
-          <ol className="grid grid-cols-4 gap-1.5" aria-label="Avance del pedido">
-            {ORDER_FLOW.map((status, index) => (
+          <ol className={cn('grid gap-1.5', flow.length === 4 ? 'grid-cols-4' : 'grid-cols-3')} aria-label="Avance del pedido">
+            {flow.map((status, index) => (
               <li key={status} aria-current={index === step ? 'step' : undefined}>
                 <div className={cn('h-1.5 rounded-full', index <= step ? 'bg-slate-950' : 'bg-slate-200')} />
-                <p className={cn('mt-2 text-[11px] leading-tight sm:text-xs', index === step ? 'font-bold text-slate-950' : index < step ? 'font-medium text-slate-600' : 'text-slate-400')}>{ORDER_STATUS[status]}</p>
+                <p className={cn('mt-2 text-[11px] leading-tight sm:text-xs', index === step ? 'font-bold text-slate-950' : index < step ? 'font-medium text-slate-600' : 'text-slate-400')}>{status === 'in_production' ? 'Fábrica (opcional)' : ORDER_STATUS[status]}</p>
               </li>
             ))}
           </ol>
         )}
+        {order.status === 'pending' && <p className="rounded-xl bg-emerald-50 px-3.5 py-3 text-sm text-emerald-900">{hasStock ? 'Hay stock disponible para todo este pedido: podés reservarlo o entregarlo ahora, sin pasar por fábrica.' : 'Pedido tomado, todavía no enviado a fábrica. Podés esperar, comprar mercadería en una tanda o usar stock cuando esté disponible.'}</p>}
+        {order.status === 'in_production' && <p className="rounded-xl bg-amber-50 px-3.5 py-3 text-sm text-amber-900">La mercadería se registra al recibir la tanda. Para usar stock existente, quitá primero este pedido de la tanda.</p>}
+        {order.status === 'ready' && <p className="rounded-xl bg-emerald-50 px-3.5 py-3 text-sm text-emerald-900">Stock reservado para este pedido. Al entregarlo se descuentan las unidades físicas.</p>}
         {cancelled && <p className="rounded-xl bg-slate-100 px-3.5 py-3 text-sm text-slate-600">Este pedido está cancelado.</p>}
 
         <div className="grid gap-6 md:grid-cols-[1.35fr_1fr]">

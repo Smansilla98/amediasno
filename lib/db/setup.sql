@@ -76,3 +76,12 @@ create index if not exists production_batches_user_idx on production_batches (us
 create index if not exists batch_orders_batch_idx on batch_orders (batch_id);
 create index if not exists batch_orders_order_idx on batch_orders (order_id);
 create index if not exists stock_receipts_key_idx on stock_receipts (user_id, idempotency_key);
+
+-- Stock por talle. El stock previo se conserva como «sin talle», sin adivinar su distribución.
+alter table products add column if not exists stock_by_size jsonb;
+update products set stock_by_size = jsonb_build_object('', stock) where stock_by_size is null;
+alter table products alter column stock_by_size set default '{}'::jsonb;
+alter table products alter column stock_by_size set not null;
+alter table supplier_batches add column if not exists size text;
+
+alter table stock_movements add column if not exists size text;

@@ -1,14 +1,14 @@
 'use server'
 
-import { desc, eq } from 'drizzle-orm'
+import { asc, desc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { batchOrders, cashAccounts, cashMovements, customers, expenses, orderItems, orders, payments, productionBatches, products, suppliers } from '@/lib/db/schema'
+import { batchOrders, cashAccounts, cashMovements, customers, expenses, orderItems, orders, payments, productionBatches, products, suppliers, supplierBatches } from '@/lib/db/schema'
 import { requireUserId } from '@/lib/session'
 
 /** Todos los datos del negocio de quien está en sesión. La interfaz arma sus vistas a partir de esto. */
 export async function getWorkspace() {
   const userId = await requireUserId()
-  const [orderRows, itemRows, customerRows, productRows, paymentRows, expenseRows, accountRows, movementRows, supplierRows, batchRows, batchOrderRows] = await Promise.all([
+  const [orderRows, itemRows, customerRows, productRows, paymentRows, expenseRows, accountRows, movementRows, supplierRows, batchRows, batchOrderRows, stockLineRows] = await Promise.all([
     db.select().from(orders).where(eq(orders.userId, userId)).orderBy(desc(orders.createdAt)),
     db.select({ item: orderItems }).from(orderItems).innerJoin(orders, eq(orderItems.orderId, orders.id)).where(eq(orders.userId, userId)),
     db.select().from(customers).where(eq(customers.userId, userId)).orderBy(customers.name),
@@ -19,7 +19,8 @@ export async function getWorkspace() {
     db.select().from(cashMovements).where(eq(cashMovements.userId, userId)).orderBy(desc(cashMovements.occurredAt)),
     db.select().from(suppliers).where(eq(suppliers.userId, userId)).orderBy(suppliers.name),
     db.select().from(productionBatches).where(eq(productionBatches.userId, userId)).orderBy(desc(productionBatches.requestedAt)),
-    db.select().from(batchOrders).where(eq(batchOrders.userId, userId)),
+    db.select().from(batchOrders).where(eq(batchOrders.userId, userId)).orderBy(asc(batchOrders.createdAt)),
+    db.select().from(supplierBatches).where(eq(supplierBatches.userId, userId)),
   ])
   return {
     orders: orderRows,
@@ -33,6 +34,7 @@ export async function getWorkspace() {
     suppliers: supplierRows,
     batches: batchRows,
     batchOrders: batchOrderRows,
+    stockLines: stockLineRows,
   }
 }
 

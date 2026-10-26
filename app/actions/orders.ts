@@ -11,6 +11,7 @@ import { applyOrderStatus } from '@/lib/stock'
 const method = (value?: string) => (PAYMENT_METHODS as readonly string[]).includes(value ?? '') ? value! : 'Efectivo'
 
 export type OrderInput = {
+  fulfillment?: 'pending' | 'ready' | 'delivered'
   customerId?: string
   newCustomer?: { name: string; phone?: string }
   firstName?: string
@@ -46,6 +47,7 @@ export async function createOrder(input: OrderInput) {
         const [product] = await tx.select().from(products).where(and(eq(products.id, item.productId), eq(products.userId, userId)))
         if (!product || !product.active) throw new UserError('Uno de los productos ya no está disponible.')
         if (!Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 10_000) throw new UserError(`Revisá la cantidad de ${product.name}.`)
+        if (product.sizes.length && (!item.size || !product.sizes.includes(item.size))) throw new UserError(`Elegí un talle válido de ${product.name}.`)
         const unitPriceCents = amount(item.unitPriceCents ?? product.priceCents, `Revisá el precio de ${product.name}.`, { allowZero: true })
         lines.push({ product, size: clean(item.size), quantity: item.quantity, unitPriceCents })
       }
@@ -71,7 +73,13 @@ export async function createOrder(input: OrderInput) {
       for (const line of lines) {
         await tx.insert(orderItems).values({ id: crypto.randomUUID(), orderId: order.id, productId: line.product.id, size: line.size, quantity: line.quantity, unitPriceCents: line.unitPriceCents, unitCostCents: line.product.costCents })
         await tx.update(products).set({ requestedStock: sql`${products.requestedStock} + ${line.quantity}` }).where(eq(products.id, line.product.id))
-        await tx.insert(stockMovements).values({ id: crypto.randomUUID(), userId, productId: line.product.id, type: 'requested', quantity: line.quantity, notes: `Pedido ${order.code}` })
+        await tx.insert(stockMovements).values({ id: crypto.randomUUID(), userId, productId: line.product.id, size: line.size, type: 'requested', quantity: line.quantity, notes: `Pedido ${order.code}` })
+      }
+      if (input.fulfillment && !['pending', 'ready', 'delivered'].includes(input.fulfillment)) throw new UserError('Forma de entrega inválida.')
+      if (input.fulfillment && input.fulfillment !== 'pending') {
+        if (!lines.length) throw new UserError('Agregá productos para usar stock.')
+        await applyOrderStatus(tx, order, input.fulfillment)
+        order.status = input.fulfillment
       }
       if (depositCents > 0) {
         await tx.insert(payments).values({ id: crypto.randomUUID(), userId, orderId: order.id, amountCents: depositCents, method: method(input.method), notes: 'Seña' })
@@ -96,7 +104,7 @@ export async function updateOrder(input: { id: string; firstName?: string; lastN
 
 export async function setOrderStatus(id: string, status: OrderStatus) {
   return run(async (userId) => {
-    if (!(status in ORDER_STATUS)) throw new UserError('Estado inválido.')
+    if (!Object.hasOwn(ORDER_STATUS, status)) throw new UserError('Estado inválido.')
     return db.transaction(async (tx) => {
       const order = await lockOrder(tx, userId, id)
       if (order.status === 'cancelled' && status !== 'pending') throw new UserError('Para retomar un pedido cancelado, primero volvelo a "Tomado".')

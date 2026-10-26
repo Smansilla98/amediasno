@@ -5,13 +5,14 @@ import { useState } from 'react'
 import { saveCustomer } from '@/app/actions/customers'
 import { createCashMovement, createExpense, saveCashAccount } from '@/app/actions/finance'
 import { assignOrdersToBatch, receiveBatch, removeOrderFromBatch, saveBatch, saveSupplier, setBatchStatus } from '@/app/actions/production'
-import { adjustStock, saveProduct } from '@/app/actions/products'
+import { adjustStock, classifyStock, saveProduct } from '@/app/actions/products'
 import { BatchBadge } from '@/components/app/parts'
 import { useApp } from '@/components/app/store'
 import { Button, Field, FormSection, Input, MoneyInput, Select, Textarea } from '@/components/ui/controls'
 import { FormModal, Modal } from '@/components/ui/modal'
 import { EXPENSE_CATEGORIES, STANDARD_SIZES, formatDate, hasChart, money, sortSizes, toCents, todayISO, type SizeChart } from '@/lib/domain'
 import type { OrderView } from '@/lib/view'
+import { WhatsAppLink } from '@/components/app/whatsapp-link'
 import { cn } from '@/lib/utils'
 
 const text = (form: FormData, key: string) => String(form.get(key) ?? '').trim()
@@ -61,7 +62,7 @@ export function ProductForm({ id }: { id?: string }) {
   return (
     <FormModal open onClose={close} size="lg" icon={Shirt} title={product ? 'Editar producto' : 'Nuevo producto'} submitLabel={product ? 'Guardar cambios' : 'Guardar producto'}
       summary={priceCents > 0 ? <>Ganás <strong className="text-slate-950">{money(priceCents - costCents)}</strong> por unidad ({Math.round(((priceCents - costCents) / priceCents) * 100)}%)</> : undefined}
-      onSubmit={(form) => submit(saveProduct({ id, name: text(form, 'name'), category: text(form, 'category'), color: text(form, 'color'), costCents, priceCents, sizes, sizeChart: chart.columns.length ? chart : null, stock: Number(text(form, 'stock') || 0) }), product ? 'Producto actualizado' : 'Producto guardado').then((error) => { if (!error) close(); return error })}>
+      onSubmit={(form) => submit(saveProduct({ id, name: text(form, 'name'), category: text(form, 'category'), color: text(form, 'color'), costCents, priceCents, sizes, sizeChart: chart.columns.length ? chart : null, stock: Number(text(form, 'stock') || 0), stockSize: text(form, 'stockSize') }), product ? 'Producto actualizado' : 'Producto guardado').then((error) => { if (!error) close(); return error })}>
       <div className="space-y-5">
         <FormSection>
           <Field label="Nombre" className="sm:col-span-2"><Input name="name" required autoFocus defaultValue={product?.name} placeholder="Campera" /></Field>
@@ -90,6 +91,7 @@ export function ProductForm({ id }: { id?: string }) {
               )
             })}
           </div>
+          {!product && <Field label="Talle del stock inicial" optional className="mt-3" hint="Si cargaste stock inicial, indicá a qué talle corresponde. Para distribuir varios talles, usá Ajustar stock después de guardar."><Select name="stockSize" defaultValue=""><option value="">Sin talle / clasificar después</option>{ordered.map((size) => <option key={size}>{size}</option>)}</Select></Field>}
           <div className="mt-3 flex max-w-xs gap-2">
             <Input value={custom} onChange={(event) => setCustom(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addCustom() } }} placeholder="Otro talle: Único, 35-38…" aria-label="Agregar otro talle" />
             <Button variant="secondary" onClick={addCustom} disabled={!custom.trim()}>Agregar</Button>
@@ -166,18 +168,21 @@ export function SizeChartModal({ id }: { id: string }) {
 export function StockForm({ id }: { id: string }) {
   const { view, close, submit } = useApp()
   const product = view.productById.get(id)
-  const [direction, setDirection] = useState<1 | -1>(1)
+  const [direction, setDirection] = useState<1 | -1 | 0>(1)
   const [quantity, setQuantity] = useState('')
+  const [size, setSize] = useState('')
   if (!product) return null
-  const delta = direction * (Number(quantity) || 0)
+  const delta = (direction || 1) * (Number(quantity) || 0)
   return (
     <FormModal open onClose={close} size="sm" icon={Boxes} title="Ajustar stock" description={product.name} submitLabel="Aplicar ajuste" submitDisabled={!delta}
-      summary={delta ? <>Queda en <strong className="text-slate-950">{product.stock + delta} u.</strong></> : <>Hoy hay <strong>{product.stock} u.</strong></>}
-      onSubmit={(form) => submit(adjustStock({ productId: id, delta, notes: text(form, 'notes') }), 'Stock actualizado').then((error) => { if (!error) close(); return error })}>
+      summary={direction === 0 ? <>Total físico sin cambios · {product.stockBySize[''] ?? 0} u. sin talle</> : delta ? <>Queda en <strong className="text-slate-950">{(product.stockBySize[size] ?? 0) + delta} u.</strong></> : <>Hoy hay <strong>{product.stockBySize[size] ?? 0} u. en este talle</strong></>}
+      onSubmit={(form) => submit(direction === 0 ? classifyStock({ productId: id, size, quantity: Number(quantity) }) : adjustStock({ productId: id, delta, size, notes: text(form, 'notes') }), 'Stock actualizado').then((error) => { if (!error) close(); return error })}>
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
-          {([[1, 'Sumar'], [-1, 'Restar']] as const).map(([value, label]) => <button key={label} type="button" onClick={() => setDirection(value)} className={cn('h-10 rounded-lg text-sm font-semibold outline-none transition focus-visible:ring-2 focus-visible:ring-slate-950', direction === value ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500')}>{label}</button>)}
+        <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full text-xs"><thead className="bg-slate-50"><tr><th className="p-2 text-left">Talle</th><th>Físico</th><th>Reserva</th><th>Libre</th></tr></thead><tbody>{view.products.find((row) => row.id === id)?.inventory.map((row) => <tr key={row.size}><th className="p-2 text-left">{row.size || 'Sin talle'}</th><td className="text-center">{row.stock}</td><td className="text-center">{row.reserved}</td><td className="text-center">{row.available}</td></tr>)}</tbody></table></div>
+        <div className="grid grid-cols-3 gap-2 rounded-xl bg-slate-100 p-1">
+          {([[1, 'Sumar'], [-1, 'Restar'], [0, 'Clasificar']] as const).map(([value, label]) => <button key={label} type="button" onClick={() => setDirection(value)} className={cn('h-10 rounded-lg text-sm font-semibold outline-none transition focus-visible:ring-2 focus-visible:ring-slate-950', direction === value ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500')}>{label}</button>)}
         </div>
+        <Field label="Talle" hint="Clasificar transfiere unidades de ‘Sin talle’ al talle elegido sin cambiar el total físico."><Select required={direction === 0} value={size} onChange={(event) => setSize(event.target.value)}><option value="">{direction === 0 ? 'Elegí talle destino…' : 'Sin talle / legado'}</option>{[...new Set([...product.sizes, ...Object.keys(product.stockBySize).filter(Boolean)])].map((value) => <option key={value}>{value}</option>)}</Select></Field>
         <Field label="Unidades"><Input type="number" inputMode="numeric" min={1} required autoFocus value={quantity} onChange={(event) => setQuantity(event.target.value)} className="tabular-nums" /></Field>
         <Field label="Motivo" optional><Input name="notes" placeholder="Conteo, rotura, regalo…" /></Field>
         <p className="text-xs text-slate-500">La mercadería que llega de fábrica entra sola al recibir una tanda: usá esto solo para correcciones.</p>
@@ -194,7 +199,7 @@ export function SupplierForm({ id }: { id?: string }) {
       onSubmit={(form) => submit(saveSupplier({ id, name: text(form, 'name'), contact: text(form, 'contact'), categories: list(text(form, 'categories')) }), supplier ? 'Proveedor actualizado' : 'Proveedor guardado').then((error) => { if (!error) close(); return error })}>
       <FormSection>
         <Field label="Nombre de la fábrica" className="sm:col-span-2"><Input name="name" required autoFocus defaultValue={supplier?.name} /></Field>
-        <Field label="Contacto" optional><Input name="contact" defaultValue={supplier?.contact ?? ''} placeholder="WhatsApp o teléfono" /></Field>
+        <Field label="Contacto" optional hint="Para WhatsApp: teléfono argentino con área, o +código de país para otros países."><Input name="contact" type="tel" defaultValue={supplier?.contact ?? ''} placeholder="WhatsApp o teléfono" /></Field>
         <Field label="Qué fabrica" optional hint="Separado por coma."><Input name="categories" defaultValue={supplier?.categories.join(', ')} placeholder="Medias, calzas" /></Field>
       </FormSection>
     </FormModal>
@@ -223,14 +228,16 @@ const useSelection = (initial: string[] = []) => {
   const toggle = (id: string) => setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
   return [selected, toggle, setSelected] as const
 }
-const waitingOrders = (orders: OrderView[]) => orders.filter((order) => order.status === 'pending' && !order.batch && order.items.length > 0)
+const waitingOrders = (orders: OrderView[]) => orders.filter((order) => order.status === 'pending' && (!order.batch || order.batch.status === 'received') && order.items.length > 0)
 
 export function BatchForm({ id }: { id?: string }) {
   const { view, close, submit, open } = useApp()
   const batch = id ? view.batches.find((item) => item.id === id) : undefined
   const suppliers = view.suppliers.filter((supplier) => supplier.active || supplier.id === batch?.supplierId)
   const candidates = waitingOrders(view.orders)
-  const [selected, toggle] = useSelection(batch ? [] : candidates.map((order) => order.id))
+  const [selected, toggle] = useSelection()
+  const [stockItems, setStockItems] = useState<{ productId: string; size: string; quantity: number }[]>([])
+  const patchStock = (index: number, patch: Partial<typeof stockItems[number]>) => setStockItems((rows) => rows.map((row, i) => i === index ? { ...row, ...patch } : row))
   if (!suppliers.length) {
     return (
       <Modal open onClose={close} size="sm" icon={Truck} title="Nueva tanda" footer={<><Button variant="ghost" onClick={close}>Ahora no</Button><Button onClick={() => { close(); open({ type: 'supplier' }) }}><Plus className="size-4" /> Cargar proveedor</Button></>}>
@@ -239,9 +246,9 @@ export function BatchForm({ id }: { id?: string }) {
     )
   }
   return (
-    <FormModal open onClose={close} icon={Truck} title={batch ? 'Editar tanda' : 'Nueva tanda'} description={batch ? undefined : 'Agrupá pedidos para encargarlos juntos a la fábrica.'} submitLabel={batch ? 'Guardar cambios' : 'Crear tanda'}
+    <FormModal open onClose={close} icon={Truck} title={batch ? 'Editar tanda' : 'Nueva tanda'} description={batch ? 'Editá los datos de la tanda. Las líneas para stock se mantienen; los pedidos se suman o quitan desde el detalle.' : 'Elegí pedidos, mercadería para stock o ambos. Nada se selecciona automáticamente.'} submitLabel={batch ? 'Guardar cambios' : 'Crear tanda'}
       summary={!batch && selected.size > 0 ? <><strong className="text-slate-950">{selected.size}</strong> pedidos · {candidates.filter((order) => selected.has(order.id)).reduce((sum, order) => sum + order.units, 0)} unidades</> : undefined}
-      onSubmit={(form) => submit(saveBatch({ id, supplierId: text(form, 'supplierId'), name: text(form, 'name'), expectedAt: text(form, 'expectedAt'), notes: text(form, 'notes'), orderIds: batch ? undefined : [...selected] }), batch ? 'Tanda actualizada' : 'Tanda creada').then((error) => { if (!error) close(); return error })}>
+      onSubmit={(form) => submit(saveBatch({ id, supplierId: text(form, 'supplierId'), name: text(form, 'name'), expectedAt: text(form, 'expectedAt'), notes: text(form, 'notes'), orderIds: batch ? undefined : [...selected], stockItems: batch ? undefined : stockItems }), batch ? 'Tanda actualizada' : 'Tanda creada').then((error) => { if (!error) close(); return error })}>
       <div className="space-y-5">
         <FormSection>
           <Field label="Proveedor"><Select name="supplierId" required defaultValue={batch?.supplierId ?? (suppliers.length === 1 ? suppliers[0].id : '')}><option value="" disabled>Elegí…</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</Select></Field>
@@ -249,6 +256,20 @@ export function BatchForm({ id }: { id?: string }) {
           <Field label="Llega aproximadamente" optional><Input name="expectedAt" type="date" defaultValue={batch?.expectedAt ?? ''} /></Field>
           <Field label="Notas" optional><Input name="notes" defaultValue={batch?.notes ?? ''} /></Field>
         </FormSection>
+        {!batch && <section className="space-y-3 border-t border-slate-200 pt-5">
+          <h3 className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Mercadería adicional para stock</h3>
+          <p className="text-sm text-slate-500">Podés comprar sin tener pedidos de clientes. Estas unidades quedan libres al recibir la tanda.</p>
+          {stockItems.map((item, index) => {
+            const product = view.productById.get(item.productId)
+            return <div key={index} className="grid grid-cols-2 gap-2 rounded-xl border border-slate-200 p-3">
+              <Field label="Producto"><Select required value={item.productId} onChange={(event) => patchStock(index, { productId: event.target.value, size: '' })}><option value="">Elegí…</option>{view.products.filter((row) => row.active).map((row) => <option key={row.id} value={row.id}>{row.name}{row.color ? ` · ${row.color}` : ''}</option>)}</Select></Field>
+              <Field label="Talle"><Select required={!!product?.sizes.length} value={item.size} onChange={(event) => patchStock(index, { size: event.target.value })}><option value="">{product?.sizes.length ? 'Elegí talle…' : 'Sin talle'}</option>{product?.sizes.map((size) => <option key={size}>{size}</option>)}</Select></Field>
+              <Field label="Unidades"><Input type="number" required min={1} max={10000} value={item.quantity} onChange={(event) => patchStock(index, { quantity: Number(event.target.value) })} /></Field>
+              <Button variant="ghost" onClick={() => setStockItems((rows) => rows.filter((_, i) => i !== index))}>Quitar</Button>
+            </div>
+          })}
+          <Button variant="secondary" size="sm" onClick={() => setStockItems((rows) => [...rows, { productId: '', size: '', quantity: 1 }])}><Plus className="size-3.5" /> Agregar para stock</Button>
+        </section>}
         {!batch && <section className="border-t border-slate-200 pt-5"><h3 className="mb-3 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Pedidos que entran</h3><OrderChecklist orders={candidates} selected={selected} onToggle={toggle} /></section>}
       </div>
     </FormModal>
@@ -274,11 +295,11 @@ export function BatchDetail({ id }: { id: string }) {
       description={<span className="flex flex-wrap items-center gap-2"><span className="font-medium text-slate-700">{batch.supplierName}</span><BatchBadge status={batch.status} />{batch.expectedAt && !received && <span>Llega el {formatDate(batch.expectedAt)}</span>}{received && <span>Recibida el {formatDate(batch.receivedAt)}</span>}</span>}
       footer={<>
         <div className="flex w-full gap-2 sm:mr-auto sm:w-auto">
-          <Button variant="ghost" onClick={() => open({ type: 'batch', id })}><Pencil className="size-4" /> Editar</Button>
+          <Button variant="ghost" disabled={received} onClick={() => open({ type: 'batch', id })}><Pencil className="size-4" /> Editar</Button>
           <Button variant="ghost" onClick={() => open({ type: 'expense', batchId: id })}><Receipt className="size-4" /> Cargar gasto</Button>
         </div>
         {batch.status === 'requested' && <Button variant="secondary" disabled={busy} onClick={() => act(setBatchStatus(id, 'in_production'), 'Tanda en producción')}>Ya está en producción</Button>}
-        {!received && <Button variant="success" className="flex-1 sm:flex-none" disabled={busy || !batch.orders.length} onClick={() => open({ type: 'confirm', title: `¿Recibir ${batch.name}?`, confirmLabel: 'Sí, llegó todo', body: <>Entran <strong>{batch.units} unidades</strong> al stock y los <strong>{batch.orders.filter((order) => order.status !== 'cancelled').length} pedidos</strong> pasan a "Listo para entregar". No se puede deshacer.</>, run: () => act(receiveBatch(id), 'Tanda recibida: el stock ya está actualizado') })}><PackageCheck className="size-4" /> Recibir mercadería</Button>}
+        {!received && <Button variant="success" className="flex-1 sm:flex-none" disabled={busy || !batch.units} onClick={() => open({ type: 'confirm', title: `¿Recibir ${batch.name}?`, confirmLabel: 'Sí, llegó todo', body: <>Entran <strong>{batch.units} unidades</strong> al stock y los <strong>{batch.orders.filter((order) => order.status === 'pending' || order.status === 'in_production').length} pedidos</strong> pasan a "Listo para entregar". Las unidades de pedidos cancelados y la reposición quedan libres. No se puede deshacer.</>, run: () => act(receiveBatch(id), 'Tanda recibida: el stock ya está actualizado') })}><PackageCheck className="size-4" /> Recibir mercadería</Button>}
       </>}>
       <div className="grid gap-6 md:grid-cols-2">
         <section>
@@ -290,12 +311,13 @@ export function BatchDetail({ id }: { id: string }) {
               </ul>
               <div className="flex justify-between border-t border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm"><span className="font-semibold text-slate-900">{batch.units} unidades</span>{batch.costCents > 0 && <span className="tabular-nums text-slate-600">Costo estimado {money(batch.costCents)}</span>}</div>
             </div>
-          ) : <p className="rounded-xl border border-dashed border-slate-300 px-3.5 py-3 text-sm text-slate-500">Sumá pedidos para armar lo que hay que encargar.</p>}
+          ) : <p className="rounded-xl border border-dashed border-slate-300 px-3.5 py-3 text-sm text-slate-500">Esta tanda no tiene unidades para recibir.</p>}
+          <div className="mt-3"><p className="text-xs text-slate-600">{batch.stockUnits} unidades adicionales para stock libre.</p><WhatsAppLink phone={batch.supplierContact} label="Enviar pedido por WhatsApp" message={[`Hola, quisiera encargar la tanda ${batch.name}:`, ...batch.lines.map((line) => `${line.quantity} × ${line.name}${line.size ? ` · talle ${line.size}` : ''}`), `Total: ${batch.units} unidades`].join('\n')} /></div>
           {batch.notes && <p className="mt-3 rounded-xl bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900">{batch.notes}</p>}
         </section>
 
         <section>
-          <div className="mb-2 flex items-center justify-between"><h3 className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Pedidos incluidos ({batch.orders.length})</h3>{!received && candidates.length > 0 && !adding && <button onClick={() => { setSelected(new Set(candidates.map((order) => order.id))); setAdding(true) }} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold text-slate-600 outline-none hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-slate-950"><Plus className="size-3.5" /> Sumar pedidos</button>}</div>
+          <div className="mb-2 flex items-center justify-between"><h3 className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Pedidos incluidos ({batch.orders.length})</h3>{!received && candidates.length > 0 && !adding && <button onClick={() => { setSelected(new Set()); setAdding(true) }} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold text-slate-600 outline-none hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-slate-950"><Plus className="size-3.5" /> Sumar pedidos</button>}</div>
           {adding ? (
             <div className="space-y-3">
               <OrderChecklist orders={candidates} selected={selected} onToggle={toggle} />

@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { db, type Tx } from '@/lib/db'
 import { cashAccounts, customers, orders, productionBatches, products, suppliers } from '@/lib/db/schema'
+import { lockInventory } from '@/lib/inventory'
 import { UserError } from '@/lib/session'
 
 type Conn = typeof db | Tx
@@ -18,6 +19,7 @@ export async function ownProduct(conn: Conn, userId: string, id: string) {
 }
 /** Bloquea la fila del pedido hasta que termine la transacción. */
 export async function lockOrder(tx: Tx, userId: string, id: string) {
+  await lockInventory(tx, userId)
   const [row] = await tx.select().from(orders).where(and(eq(orders.id, id), eq(orders.userId, userId))).for('update')
   if (!row) throw new UserError('No encontré ese pedido.')
   return row
@@ -33,6 +35,7 @@ export async function ownSupplier(conn: Conn, userId: string, id: string) {
   return row
 }
 export async function lockBatch(tx: Tx, userId: string, id: string) {
+  await lockInventory(tx, userId)
   const [row] = await tx.select().from(productionBatches).where(and(eq(productionBatches.id, id), eq(productionBatches.userId, userId))).for('update')
   if (!row) throw new UserError('No encontré esa tanda.')
   return row

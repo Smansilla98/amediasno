@@ -1,11 +1,12 @@
 'use server'
 
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { and, eq, inArray, ne } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { batchOrders, orderItems, orders, productionBatches, products, stockMovements, stockReceipts, suppliers } from '@/lib/db/schema'
+import { batchOrders, orderItems, orders, productionBatches, products, stockMovements, stockReceipts, suppliers, supplierBatches } from '@/lib/db/schema'
 import { BATCH_STATUS, todayISO, type BatchStatus } from '@/lib/domain'
 import { clean, lockBatch, ownSupplier, required } from '@/lib/guards'
 import { run, UserError } from '@/lib/session'
+import { changePhysicalStock, lockInventory } from '@/lib/inventory'
 import { applyOrderStatus } from '@/lib/stock'
 
 export async function saveSupplier(input: { id?: string; name: string; contact?: string; categories: string[] }) {
@@ -29,17 +30,28 @@ export async function setSupplierActive(id: string, active: boolean) {
   })
 }
 
-export async function saveBatch(input: { id?: string; supplierId: string; name: string; expectedAt?: string; notes?: string; orderIds?: string[] }) {
+export async function saveBatch(input: { id?: string; supplierId: string; name: string; expectedAt?: string; notes?: string; orderIds?: string[]; stockItems?: { productId: string; size?: string; quantity: number }[] }) {
   return run(async (userId) => {
     const supplier = await ownSupplier(db, userId, required(input.supplierId, 'Elegí un proveedor.'))
     const values = { supplierId: supplier.id, name: required(input.name, 'Poné un nombre a la tanda.'), expectedAt: clean(input.expectedAt), notes: clean(input.notes) }
     return db.transaction(async (tx) => {
+      await lockInventory(tx, userId)
       if (input.id) {
-        await lockBatch(tx, userId, input.id)
+        const batch = await lockBatch(tx, userId, input.id)
+        if (batch.status === 'received') throw new UserError('No se puede editar una tanda recibida.')
         const [row] = await tx.update(productionBatches).set(values).where(eq(productionBatches.id, input.id)).returning()
         return row
       }
       const [row] = await tx.insert(productionBatches).values({ id: crypto.randomUUID(), userId, ...values }).returning()
+      if (!input.orderIds?.length && !input.stockItems?.length) throw new UserError('Elegí pedidos o agregá productos para stock.')
+      for (const item of input.stockItems ?? []) {
+        const [product] = await tx.select().from(products).where(and(eq(products.id, item.productId), eq(products.userId, userId)))
+        if (!product?.active) throw new UserError('Elegí un producto activo para reponer.')
+        if (!Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 10_000) throw new UserError('Revisá la cantidad para stock.')
+        const size = clean(item.size)
+        if (product.sizes.length && (!size || !product.sizes.includes(size))) throw new UserError(`Elegí un talle válido de ${product.name}.`)
+        await tx.insert(supplierBatches).values({ id: crypto.randomUUID(), userId, supplierId: supplier.id, batchId: row.id, productId: product.id, size, quantity: item.quantity, unitCostCents: product.costCents })
+      }
       if (input.orderIds?.length) await assign(tx, userId, row.id, input.orderIds)
       return row
     })
@@ -50,10 +62,11 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
 async function assign(tx: Tx, userId: string, batchId: string, orderIds: string[]) {
   const rows = await tx.select().from(orders).where(and(eq(orders.userId, userId), inArray(orders.id, orderIds))).for('update')
-  const taken = await tx.select({ orderId: batchOrders.orderId }).from(batchOrders).where(and(eq(batchOrders.userId, userId), inArray(batchOrders.orderId, orderIds)))
+  const taken = await tx.select({ orderId: batchOrders.orderId }).from(batchOrders).innerJoin(productionBatches, eq(batchOrders.batchId, productionBatches.id)).where(and(eq(batchOrders.userId, userId), inArray(batchOrders.orderId, orderIds), ne(productionBatches.status, 'received')))
   const already = new Set(taken.map((row) => row.orderId))
+  if (rows.length !== new Set(orderIds).size) throw new UserError('Uno de los pedidos no existe.')
+  if (already.size) throw new UserError('Uno de los pedidos ya pertenece a una tanda.')
   for (const order of rows) {
-    if (already.has(order.id)) continue
     if (order.status !== 'pending' && order.status !== 'in_production') throw new UserError(`El pedido ${order.code} ya no está esperando fábrica.`)
     await tx.insert(batchOrders).values({ id: crypto.randomUUID(), userId, batchId, orderId: order.id })
     await applyOrderStatus(tx, order, 'in_production')
@@ -83,7 +96,7 @@ export async function removeOrderFromBatch(input: { batchId: string; orderId: st
 
 export async function setBatchStatus(id: string, status: Exclude<BatchStatus, 'received'>) {
   return run(async (userId) => db.transaction(async (tx) => {
-    if (!(status in BATCH_STATUS) || (status as string) === 'received') throw new UserError('Estado inválido.')
+    if (!Object.hasOwn(BATCH_STATUS, status) || (status as string) === 'received') throw new UserError('Estado inválido.')
     const batch = await lockBatch(tx, userId, id)
     if (batch.status === 'received') throw new UserError('Esa tanda ya se recibió.')
     await tx.update(productionBatches).set({ status }).where(eq(productionBatches.id, id))
@@ -105,18 +118,20 @@ export async function receiveBatch(id: string) {
     const links = await tx.select().from(batchOrders).where(and(eq(batchOrders.userId, userId), eq(batchOrders.batchId, batch.id)))
     const pending = links.length ? await tx.select().from(orders).where(and(eq(orders.userId, userId), inArray(orders.id, links.map((link) => link.orderId)))).for('update') : []
     const active = pending.filter((order) => order.status === 'pending' || order.status === 'in_production')
-    const items = active.length ? await tx.select().from(orderItems).where(inArray(orderItems.orderId, active.map((order) => order.id))) : []
+    const items = pending.length ? await tx.select().from(orderItems).where(inArray(orderItems.orderId, pending.map((order) => order.id))) : []
+    const extra = await tx.select().from(supplierBatches).where(and(eq(supplierBatches.userId, userId), eq(supplierBatches.batchId, batch.id)))
 
+    if (!items.length && !extra.length) throw new UserError('Esta tanda no tiene mercadería para recibir.')
     const byProduct = new Map<string, number>()
-    for (const item of items) byProduct.set(item.productId, (byProduct.get(item.productId) ?? 0) + item.quantity)
-    for (const [productId, quantity] of byProduct) {
-      await tx.update(products).set({ stock: sql`${products.stock} + ${quantity}` }).where(and(eq(products.id, productId), eq(products.userId, userId)))
-      await tx.insert(stockMovements).values({ id: crypto.randomUUID(), userId, productId, batchId: batch.id, type: 'received', quantity, notes: batch.name })
+    for (const item of [...items, ...extra]) {
+      await changePhysicalStock(tx, userId, item.productId, item.size, item.quantity)
+      byProduct.set(item.productId, (byProduct.get(item.productId) ?? 0) + item.quantity)
+      await tx.insert(stockMovements).values({ id: crypto.randomUUID(), userId, productId: item.productId, size: item.size, batchId: batch.id, type: 'received', quantity: item.quantity, notes: batch.name })
     }
+    await tx.update(productionBatches).set({ status: 'received', receivedAt: todayISO() }).where(eq(productionBatches.id, batch.id))
     for (const order of active) await applyOrderStatus(tx, order, 'ready')
 
     await tx.insert(stockReceipts).values({ id: crypto.randomUUID(), userId, batchId: batch.id, idempotencyKey: key })
-    await tx.update(productionBatches).set({ status: 'received', receivedAt: todayISO() }).where(eq(productionBatches.id, batch.id))
     return { orders: active.length, units: [...byProduct.values()].reduce((sum, quantity) => sum + quantity, 0) }
   }))
 }

@@ -9,6 +9,7 @@ import { useApp } from '@/components/app/store'
 import { ActionMenu, Badge, Button, EmptyState } from '@/components/ui/controls'
 import { ORDER_STATUS, formatDate, formatDayMonth, hasChart, money } from '@/lib/domain'
 import type { CustomerView, OrderView, ProductView } from '@/lib/view'
+import { WhatsAppLink } from '@/components/app/whatsapp-link'
 import { cn } from '@/lib/utils'
 
 const matches = (query: string, ...fields: (string | null | undefined)[]) => {
@@ -42,7 +43,7 @@ export function Overview() {
   const max = Math.max(1, ...months.flatMap((item) => [item.collectedCents, item.expensesCents]))
   const profit = month.salesCents - month.costCents
   const tasks = [
-    { count: totals.unbatched, label: 'pedidos sin encargar a fábrica', icon: Truck, tone: 'bg-amber-100 text-amber-700', onClick: () => go('tandas') },
+    { count: totals.unbatched, label: 'pedidos tomados: decidir stock o fábrica', icon: Truck, tone: 'bg-amber-100 text-amber-700', onClick: () => go('tandas') },
     { count: totals.ready, label: 'pedidos listos para entregar', icon: PackageCheck, tone: 'bg-violet-100 text-violet-700', onClick: () => go('pedidos') },
     { count: totals.owing, label: 'pedidos con saldo por cobrar', icon: WalletCards, tone: 'bg-red-100 text-red-700', onClick: () => go('pagos') },
   ].filter((task) => task.count > 0)
@@ -52,7 +53,7 @@ export function Overview() {
       <Page>
         <PageHeader title={`Hola, ${user.name.split(' ')[0]}`} description="Empezá cargando lo que vendés. Después tomá tu primer pedido." />
         <div className="grid gap-4 sm:grid-cols-3">
-          {[{ step: '1', title: 'Cargá tus productos', body: 'Con costo y precio de venta, para saber cuánto ganás.', action: 'Nuevo producto', run: () => open({ type: 'product' }) }, { step: '2', title: 'Tomá un pedido', body: 'Elegí cliente, productos y registrá la seña.', action: 'Nuevo pedido', run: () => open({ type: 'order' }) }, { step: '3', title: 'Encargá a la fábrica', body: 'Agrupá pedidos en una tanda y recibilos cuando lleguen.', action: 'Nueva tanda', run: () => open({ type: 'batch' }) }].map((item) => (
+          {[{ step: '1', title: 'Cargá tus productos', body: 'Con costo y precio de venta, para saber cuánto ganás.', action: 'Nuevo producto', run: () => open({ type: 'product' }) }, { step: '2', title: 'Tomá un pedido', body: 'Elegí cliente, productos y registrá la seña.', action: 'Nuevo pedido', run: () => open({ type: 'order' }) }, { step: '3', title: 'Encargá a la fábrica', body: 'Solo cuando lo decidas: para clientes, para stock o ambos.', action: 'Nueva tanda', run: () => open({ type: 'batch' }) }].map((item) => (
             <div key={item.step} className="flex flex-col rounded-2xl border border-slate-200 bg-white p-5">
               <span className="flex size-8 items-center justify-center rounded-full bg-slate-950 text-sm font-bold text-white">{item.step}</span>
               <p className="mt-4 text-base font-bold text-slate-950">{item.title}</p>
@@ -153,13 +154,13 @@ export function Customers() {
         <DataTable rows={rows} onRowClick={(customer) => open({ type: 'customer', id: customer.id })}
           columns={[
             { header: 'Cliente', cell: (customer) => <p className="font-semibold text-slate-900">{customer.name}</p> },
-            { header: 'Contacto', cell: (customer) => <span className="text-slate-600">{customer.phone || customer.email || '—'}</span> },
+            { header: 'Contacto', cell: (customer) => <div><span className="text-slate-600">{customer.phone || customer.email || '—'}</span><WhatsAppLink phone={customer.phone} /></div> },
             { header: 'Pedidos', align: 'right', cell: (customer) => customer.orderCount },
             { header: 'Comprado', align: 'right', cell: (customer) => money(customer.totalCents) },
             { header: 'Debe', align: 'right', cell: (customer) => customer.balanceCents > 0 ? <span className="font-semibold text-amber-700">{money(customer.balanceCents)}</span> : <span className="text-slate-400">—</span> },
             { header: '', align: 'right', cell: menu },
           ]}
-          card={(customer) => <div className="flex items-center justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{customer.name}</p><p className="mt-0.5 truncate text-xs text-slate-500">{customer.phone || customer.email || 'Sin contacto'} · {customer.orderCount} pedidos</p></div>{customer.balanceCents > 0 ? <Badge tone="amber">Debe {money(customer.balanceCents)}</Badge> : <span className="text-sm font-semibold tabular-nums text-slate-700">{money(customer.totalCents)}</span>}</div>}
+          card={(customer) => <div className="flex items-center justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{customer.name}</p><p className="mt-0.5 truncate text-xs text-slate-500">{customer.phone || customer.email || 'Sin contacto'} · {customer.orderCount} pedidos</p><WhatsAppLink phone={customer.phone} /></div>{customer.balanceCents > 0 ? <Badge tone="amber">Debe {money(customer.balanceCents)}</Badge> : <span className="text-sm font-semibold tabular-nums text-slate-700">{money(customer.totalCents)}</span>}</div>}
           empty={view.customers.length ? <EmptyState icon={Users} title="Ningún cliente coincide" /> : <EmptyState icon={Users} title="Todavía no hay clientes" action={<Button onClick={() => open({ type: 'customer' })}><Plus className="size-4" /> Cargar un cliente</Button>}>También podés cargarlos al tomar un pedido.</EmptyState>} />
       </Card>
     </Page>
@@ -200,11 +201,11 @@ export function Catalog() {
             { header: 'Costo', align: 'right', cell: (product) => <span className="text-slate-600">{money(product.costCents)}</span> },
             { header: 'Precio', align: 'right', cell: (product) => <span className="font-semibold text-slate-900">{money(product.priceCents)}</span> },
             { header: 'Margen', align: 'right', cell: (product) => product.marginPct === null ? '—' : <Badge tone={product.marginPct >= 40 ? 'green' : product.marginPct >= 20 ? 'amber' : 'red'}>{product.marginPct}%</Badge> },
-            { header: 'Stock', align: 'right', cell: (product) => <span className={cn('font-semibold', product.stock === 0 ? 'text-slate-400' : 'text-slate-900')}>{product.stock} u.</span> },
+            { header: 'Stock físico / libre', align: 'right', cell: (product) => <div><strong>{product.stock} / {product.availableStock} u.</strong><p className="text-xs text-slate-500">{product.reservedStock} reservadas</p><p className="text-xs text-slate-500">{product.inventory.filter((row) => row.stock > 0).map((row) => `${row.size || 'Sin talle'}: ${row.available} libres`).join(' · ')}</p></div> },
             { header: 'En fábrica', align: 'right', cell: (product) => product.requestedStock > 0 ? <span className="text-amber-700">{product.requestedStock} u.</span> : <span className="text-slate-400">—</span> },
             { header: '', align: 'right', cell: menu },
           ]}
-          card={(product) => <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{product.name}</p><p className="mt-0.5 truncate text-xs text-slate-500">{[product.category, product.color, product.sizes.join(' / ')].filter(Boolean).join(' · ')}</p><p className="mt-1.5 text-xs text-slate-600">Stock <strong>{product.stock}</strong>{product.requestedStock > 0 && <> · en fábrica <strong className="text-amber-700">{product.requestedStock}</strong></>}</p></div><div className="shrink-0 text-right"><p className="text-sm font-bold tabular-nums text-slate-900">{money(product.priceCents)}</p>{product.marginPct !== null && <p className="text-xs text-slate-500">{product.marginPct}% margen</p>}</div></div>}
+          card={(product) => <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{product.name}</p><p className="mt-0.5 truncate text-xs text-slate-500">{[product.category, product.color, product.sizes.join(' / ')].filter(Boolean).join(' · ')}</p><p className="mt-1.5 text-xs text-slate-600">Stock <strong>{product.stock}</strong> · libres <strong>{product.availableStock}</strong> · reserva {product.reservedStock}{product.requestedStock > 0 && <> · en fábrica <strong className="text-amber-700">{product.requestedStock}</strong></>}</p></div><div className="shrink-0 text-right"><p className="text-sm font-bold tabular-nums text-slate-900">{money(product.priceCents)}</p>{product.marginPct !== null && <p className="text-xs text-slate-500">{product.marginPct}% margen</p>}</div></div>}
           empty={view.products.length ? <EmptyState icon={Shirt} title="Ningún producto coincide" /> : <EmptyState icon={Shirt} title="El catálogo está vacío" action={<Button onClick={() => open({ type: 'product' })}><Plus className="size-4" /> Cargar un producto</Button>}>Cargá lo que vendés con su costo y precio para poder armar pedidos.</EmptyState>} />
       </Card>
     </Page>
