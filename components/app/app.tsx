@@ -1,12 +1,13 @@
 'use client'
 
 import Image from 'next/image'
-import { BarChart3, Boxes, Download, Factory, Landmark, LayoutDashboard, LoaderCircle, Menu as MenuIcon, Plus, Receipt, Shirt, ShoppingBag, Truck, UserRound, Users, WalletCards, type LucideIcon } from 'lucide-react'
+import { BarChart3, Boxes, Download, Factory, FileSpreadsheet, Landmark, LayoutDashboard, LoaderCircle, Menu as MenuIcon, Plus, Receipt, Shirt, ShoppingBag, Truck, UserRound, Users, WalletCards, type LucideIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import type { Workspace } from '@/app/actions/workspace'
 import { BatchDetail, BatchForm } from '@/components/app/forms/factory-modals'
 import { AccountForm, CustomerForm, ExpenseForm, MovementForm, ProductForm, SizeChartModal, SupplierForm } from '@/components/app/forms/other-modals'
 import { StockForm } from '@/components/app/forms/stock-modals'
+import { ImportForm } from '@/components/app/forms/import-modal'
 import { OrderDetail, OrderEditForm, OrderForm, PaymentForm } from '@/components/app/forms/order-modals'
 import { Account, Batches, Cash, EXPORTS, FORMATS, Payments, Reports, Suppliers, download } from '@/components/app/sections/business'
 import { Catalog, Customers, Orders, Overview } from '@/components/app/sections/operations'
@@ -102,6 +103,8 @@ function Shell() {
                 { label: 'Producto', icon: Shirt, onSelect: () => open({ type: 'product' }) },
                 { label: 'Pedido a fábrica', icon: Truck, onSelect: () => open({ type: 'batch' }) },
                 { label: 'Gasto', icon: Receipt, onSelect: () => open({ type: 'expense' }) },
+                { label: 'Importar productos (Excel)', icon: FileSpreadsheet, onSelect: () => open({ type: 'import', kind: 'products' }) },
+                { label: 'Importar clientes (Excel)', icon: FileSpreadsheet, onSelect: () => open({ type: 'import', kind: 'customers' }) },
               ]} />
             </div>
           </div>
@@ -135,7 +138,7 @@ function MoreSheet() {
       </div>
       <h3 className="mb-2 mt-6 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Cargar</h3>
       <div className="grid grid-cols-2 gap-2">
-        {([['Cliente', Users, { type: 'customer' }], ['Producto', Shirt, { type: 'product' }], ['Pedido a fábrica', Truck, { type: 'batch' }], ['Gasto', Receipt, { type: 'expense' }]] as [string, LucideIcon, ModalState][]).map(([label, Icon, modal]) => <Button key={label} variant="secondary" className="justify-start" onClick={() => { close(); open(modal) }}><Icon className="size-4" /> {label}</Button>)}
+        {([['Cliente', Users, { type: 'customer' }], ['Producto', Shirt, { type: 'product' }], ['Pedido a fábrica', Truck, { type: 'batch' }], ['Gasto', Receipt, { type: 'expense' }], ['Importar productos', FileSpreadsheet, { type: 'import', kind: 'products' }], ['Importar clientes', FileSpreadsheet, { type: 'import', kind: 'customers' }]] as [string, LucideIcon, ModalState][]).map(([label, Icon, modal]) => <Button key={label} variant="secondary" className="justify-start" onClick={() => { close(); open(modal) }}><Icon className="size-4" /> {label}</Button>)}
       </div>
     </Modal>
   )
@@ -162,6 +165,7 @@ function ModalView({ modal, close }: { modal: ModalState; close: () => void }) {
     case 'account': return <AccountForm id={modal.id} />
     case 'expense': return <ExpenseForm batchId={modal.batchId} />
     case 'movement': return <MovementForm accountId={modal.accountId} />
+    case 'import': return <ImportForm kind={modal.kind} />
     case 'more': return <MoreSheet />
     case 'confirm': return <ConfirmModal open onClose={close} title={modal.title} confirmLabel={modal.confirmLabel} danger={modal.danger} onConfirm={async () => { if (await modal.run()) close() }}>{modal.body}</ConfirmModal>
   }

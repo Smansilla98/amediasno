@@ -1,5 +1,7 @@
 import { betterAuth } from 'better-auth'
+import { APIError, createAuthMiddleware } from 'better-auth/api'
 import { pool } from '@/lib/db'
+import { signUpOpen } from '@/lib/signup'
 
 const dev = process.env.NODE_ENV === 'development'
 const v0Origins = [process.env.V0_RUNTIME_URL, process.env.V0_DEV_APP_URL, process.env.V0_BUILD_URL, process.env.V0_SANDBOX_URL].filter(Boolean) as string[]
@@ -13,5 +15,11 @@ export const auth = betterAuth({
   emailAndPassword: { enabled: true, minPasswordLength: 8 },
   baseURL: process.env.BETTER_AUTH_URL || hostedOrigins[0] || process.env.V0_RUNTIME_URL || (dev ? 'http://localhost:3000' : undefined),
   trustedOrigins: [...(dev ? ['http://localhost:3000'] : []), ...v0Origins, ...hostedOrigins, ...(process.env.BETTER_AUTH_URL ? [process.env.BETTER_AUTH_URL] : [])],
+  // El registro se controla acá y no sólo en la página: también bloquea llamadas directas a la API.
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      if (ctx.path === '/sign-up/email' && !(await signUpOpen())) throw APIError.from('FORBIDDEN', { message: 'El registro está cerrado.', code: 'SIGN_UP_CLOSED' })
+    }),
+  },
   ...(embedded ? { advanced: { defaultCookieAttributes: { sameSite: 'none' as const, secure: true } } } : {}),
 })

@@ -23,6 +23,7 @@ export type ModalState =
   | { type: 'account'; id?: string }
   | { type: 'expense'; batchId?: string }
   | { type: 'movement'; accountId?: string }
+  | { type: 'import'; kind: 'products' | 'customers' }
   | { type: 'more' }
   | { type: 'confirm'; title: string; body: ReactNode; confirmLabel: string; danger?: boolean; run: () => Promise<boolean> }
 

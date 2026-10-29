@@ -1,6 +1,6 @@
 'use client'
 
-import { Boxes, ClipboardList, PackageOpen, Plus, Shirt, Truck } from 'lucide-react'
+import { Boxes, ClipboardList, FileSpreadsheet, PackageOpen, Plus, Shirt, Truck } from 'lucide-react'
 import { useState } from 'react'
 import { Card, Chips, Page, PageHeader, SearchBox, Stat } from '@/components/app/parts'
 import { useApp } from '@/components/app/store'
@@ -35,14 +35,14 @@ export function Stock() {
     return (
       <Page>
         <PageHeader title="Stock" description="Lo que tenés en mano, talle por talle." />
-        <Card><EmptyState icon={Boxes} title="Todavía no hay productos" action={<Button onClick={() => open({ type: 'product' })}><Plus className="size-4" /> Cargar un producto</Button>}>Al cargar un producto podés indicar cuántas unidades tenés de cada talle.</EmptyState></Card>
+        <Card><EmptyState icon={Boxes} title="Todavía no hay productos" action={<div className="flex flex-wrap justify-center gap-2"><Button onClick={() => open({ type: 'import', kind: 'products' })}><FileSpreadsheet className="size-4" /> Importar desde Excel</Button><Button variant="secondary" onClick={() => open({ type: 'product' })}><Plus className="size-4" /> Cargar uno</Button></div>}>Al cargar un producto podés indicar cuántas unidades tenés de cada talle, o importar todo desde una planilla.</EmptyState></Card>
       </Page>
     )
   }
 
   return (
     <Page>
-      <PageHeader title="Stock" description="Lo que tenés en mano, talle por talle. Disponible = lo que hay menos lo reservado para ventas." actions={<Button variant="secondary" onClick={() => open({ type: 'batch' })}><Truck className="size-4" /> Pedir a fábrica</Button>} />
+      <PageHeader title="Stock" description="Lo que tenés en mano, talle por talle. Disponible = lo que hay menos lo reservado para ventas." actions={<><Button variant="secondary" onClick={() => open({ type: 'import', kind: 'products' })}><FileSpreadsheet className="size-4" /> Importar conteo</Button><Button variant="secondary" onClick={() => open({ type: 'batch' })}><Truck className="size-4" /> Pedir a fábrica</Button></>} />
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <Stat label="En mano" value={`${sum((product) => product.stock)} u.`} icon={Boxes} />
         <Stat label="Disponibles" value={`${sum((product) => product.availableStock)} u.`} detail="Para vender ya" icon={PackageOpen} tone="emerald" />

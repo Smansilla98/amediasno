@@ -15,9 +15,10 @@ const ERRORS: Record<string, string> = {
   USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL: 'Ya hay una cuenta con ese email. Probá ingresar.',
   PASSWORD_TOO_SHORT: 'La contraseña tiene que tener al menos 8 caracteres.',
   INVALID_EMAIL: 'Revisá el email.',
+  SIGN_UP_CLOSED: 'El registro está cerrado. Pedile acceso a quien administra la app.',
 }
 
-export function AuthForm({ mode }: { mode: 'sign-in' | 'sign-up' }) {
+export function AuthForm({ mode, canSignUp = true }: { mode: 'sign-in' | 'sign-up' | 'closed'; canSignUp?: boolean }) {
   const signUp = mode === 'sign-up'
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -49,17 +50,23 @@ export function AuthForm({ mode }: { mode: 'sign-in' | 'sign-up' }) {
           <h1 className="mt-4 text-2xl font-bold tracking-tight text-slate-950">{signUp ? 'Creá tu cuenta' : BRAND}</h1>
           <p className="mt-1.5 text-sm text-slate-500">{signUp ? 'Ventas, stock y fábrica en un solo lugar.' : 'Seguí tus ventas, stock y pedidos a fábrica.'}</p>
         </div>
-        <form onSubmit={submit} className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        {mode === 'closed' ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-600 shadow-sm">
+            <p className="font-semibold text-slate-950">El registro está cerrado</p>
+            <p className="mt-1.5">Esta app ya tiene su cuenta. Si necesitás una cuenta, pedile acceso a quien la administra.</p>
+            <Link href="/sign-in" className="mt-4 inline-block font-semibold text-slate-950 underline underline-offset-4">Ingresar</Link>
+          </div>
+        ) : <form onSubmit={submit} className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           {signUp && <Field label="Tu nombre"><Input name="name" required autoComplete="name" autoFocus /></Field>}
           <Field label="Email"><Input name="email" type="email" required autoComplete="email" inputMode="email" autoFocus={!signUp} /></Field>
           <Field label="Contraseña" hint={signUp ? 'Al menos 8 caracteres.' : undefined}><Input name="password" type="password" required minLength={signUp ? 8 : undefined} autoComplete={signUp ? 'new-password' : 'current-password'} /></Field>
           {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm font-medium text-red-700">{error}</p>}
           <Button type="submit" disabled={loading} className="mt-1 w-full">{loading ? 'Un momento…' : signUp ? 'Crear cuenta' : 'Ingresar'}</Button>
-        </form>
-        <p className="mt-5 text-center text-sm text-slate-500">
+        </form>}
+        {mode !== 'closed' && (signUp || canSignUp) && <p className="mt-5 text-center text-sm text-slate-500">
           {signUp ? '¿Ya tenés cuenta? ' : '¿Todavía no tenés cuenta? '}
           <Link href={signUp ? '/sign-in' : '/sign-up'} className="font-semibold text-slate-950 underline underline-offset-4">{signUp ? 'Ingresar' : 'Crear cuenta'}</Link>
-        </p>
+        </p>}
       </div>
     </main>
   )

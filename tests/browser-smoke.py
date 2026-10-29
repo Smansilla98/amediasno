@@ -3,9 +3,10 @@ Crea una cuenta y datos sintéticos en la base de desarrollo configurada.
 
 Recorre el flujo principal: producto con stock por talle, venta entregada en el
 momento desde stock, venta sin stock encargada a fábrica, reposición sin ventas,
-recepción y vista móvil.
+recepción, importación desde planilla y vista móvil.
 
 Uso: python tests/browser-smoke.py [http://localhost:3000]
+(con el servidor levantado con ALLOW_SIGNUP=true si la base ya tiene cuentas)
 """
 import sys
 import uuid
@@ -119,6 +120,19 @@ with sync_playwright() as pw:
     expect(card.get_by_text('4 en mano')).to_be_visible()
     expect(card.get_by_text('1 res.')).to_be_visible()
     page.screenshot(path=str(ARTIFACTS / 'stock-final.png'), full_page=True)
+
+    # Importar desde planilla (pegado como desde Excel): crea uno y actualiza otro.
+    go(page, 'Productos')
+    page.get_by_role('button', name='Importar planilla').click()
+    d = dialog(page)
+    d.get_by_label('Pegar planilla').fill('Producto\tColor\tPrecio\tS\tM\nRemera\tBlanca\t9.000\t4\t0\nBuzo\t\t\t\t5')
+    expect(d.get_by_text('Vista previa')).to_be_visible()
+    expect(d.get_by_text('Actualiza', exact=True)).to_be_visible()
+    page.screenshot(path=str(ARTIFACTS / 'import.png'), full_page=True)
+    d.get_by_role('button', name='Importar 2 productos').click()
+    expect(page.get_by_text('Listo: 1 productos nuevos, 1 actualizados, 9 unidades')).to_be_visible()
+    go(page, 'Stock')
+    expect(page.locator('section', has_text='Remera').first.get_by_text('4 en mano')).to_be_visible()
 
     # Móvil: la barra inferior lleva a Stock.
     page.set_viewport_size({'width': 390, 'height': 844})

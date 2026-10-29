@@ -67,6 +67,25 @@ Reglas:
 - WhatsApp en clientes, proveedores, ventas y pedidos a fábrica: abre `wa.me` con el mensaje
   preparado; **no lo envía solo**.
 
+### Cargar todo de una vez (Excel, Google Sheets o CSV)
+
+**Productos → Importar planilla** (también en Stock, en Clientes y en el menú **Nuevo**):
+
+1. **Descargar Excel** baja una plantilla con una columna por talle (hoja «Ejemplo» e
+   «Instrucciones» incluidas).
+2. Completala, o seleccioná las celdas de tu propia planilla con los títulos y **pegalas**. También
+   se puede **subir** el `.xlsx` o `.csv`.
+3. La vista previa marca cada producto como **Nuevo** o **Actualiza** y lista los errores por fila.
+   No se importa nada hasta que no haya errores, y se importa todo o nada.
+
+Columnas que entiende (no importa mayúsculas ni tildes): Producto, Categoría, Color, Precio, Costo y
+una columna por talle (XS…4XL, XXL, números como 36/38, «Sin talle»). También sirve una fila por
+talle con columnas **Talle** y **Stock**. Un producto con el mismo nombre y color que uno existente
+se actualiza (precio, costo, categoría, talles nuevos) y su stock se **reemplaza** por el de la
+planilla (conteo) o se **suma** (ingreso), según lo que elijas. Nunca baja de lo reservado.
+
+Clientes: Nombre (y Apellido), Teléfono, Email, Notas. Los que ya están se saltean.
+
 ### Stock «Sin talle»
 
 Instalaciones viejas guardaban stock sin talle. Aparece en Stock en amarillo («Asignale talle»).
@@ -80,7 +99,11 @@ distribución: eso podría entregar una prenda del talle equivocado.
 2. En el servicio web → **Variables**, cargá lo de [`.env.railway.example`](.env.railway.example):
    `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `BETTER_AUTH_SECRET` (`openssl rand -hex 32`) y
    `BETTER_AUTH_URL` con la URL pública exacta (Settings → Networking → Generate Domain).
-3. Listo: cada push a la rama configurada en Railway (Settings → Source) vuelve a desplegar.
+3. Entrá a la URL y **creá tu cuenta**: la primera cuenta se puede crear sola y después el registro
+   se cierra (nadie más puede registrarse). Para sumar a alguien, poné `ALLOW_SIGNUP=true`, que se
+   registre y volvé a sacarla. `ALLOW_SIGNUP=false` lo cierra siempre.
+4. En el servicio Postgres activá **Backups**.
+5. Listo: cada push a la rama configurada en Railway (Settings → Source) vuelve a desplegar.
 
 Railway usa [`railway.toml`](railway.toml) → [`Dockerfile`](Dockerfile) → [`start.sh`](start.sh), que
 espera a Postgres, aplica el esquema (idempotente, no borra datos) y arranca Next en `$PORT`.
@@ -116,6 +139,14 @@ Para Argentina aceptamos número con área (`11 5555 5555`), formato local con `
 (`011 15 5555 5555`) o internacional (`+54 9 11 5555 5555`). Para otros países ingresar
 `+código de país`. Un contacto que sea email, texto o un número incompleto no genera botón.
 
+### Seguridad
+
+- Registro cerrado después de la primera cuenta (ver arriba); se valida en la API, no solo en la página.
+- Headers en producción: `X-Frame-Options`, `nosniff`, `Referrer-Policy`, HSTS; sin `X-Powered-By`.
+- `pnpm audit --prod` sin vulnerabilidades: `xlsx` viene del CDN oficial de SheetJS (la versión de
+  npm quedó sin parches) y `pnpm-workspace.yaml` fuerza versiones parcheadas de dependencias internas.
+- Para actualizar Next: `pnpm add next@<versión>` y correr pruebas y build.
+
 ### Pruebas de inventario
 
 Se usa Bun solo como ejecutor de pruebas (`npx bun@1` alcanza, no hace falta instalarlo).
@@ -127,7 +158,7 @@ TEST_DATABASE_URL='postgresql://usuario:clave@localhost:5432/base_pruebas' npx b
 ```
 
 Las pruebas exigen `TEST_DATABASE_URL`; nunca usar producción. Usan un usuario sintético,
-verifican las acciones reales sobre Postgres y limpian sus datos. Cubren concurrencia, rollback,
+verifican las acciones reales sobre Postgres y limpian sus datos. Cubren concurrencia, rollback, importación de planillas,
 reservas, talles, entrega desde stock de ventas en fábrica, pedidos de reposición y mixtos,
 ingreso y conteo de stock, bajas, migración idempotente y WhatsApp.
 `tests/` se excluye del typecheck/build de Next: es un runner Bun, no código de la aplicación.

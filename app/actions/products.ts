@@ -2,10 +2,10 @@
 
 import { and, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { orderItems, orders, products, stockMovements, supplierBatches } from '@/lib/db/schema'
+import { orderItems, products, stockMovements, supplierBatches } from '@/lib/db/schema'
 import { sortSizes, type SizeChart } from '@/lib/domain'
 import { amount, clean, ownProduct, required } from '@/lib/guards'
-import { changePhysicalStock, lockInventory } from '@/lib/inventory'
+import { lockInventory, setStock } from '@/lib/inventory'
 import { run, UserError } from '@/lib/session'
 
 export type ProductInput = { id?: string; name: string; category?: string; color?: string; costCents: number; priceCents: number; sizes: string[]; sizeChart?: SizeChart | null; initialStock?: Record<string, number> }
@@ -88,23 +88,8 @@ export async function updateStock(input: { productId: string; mode: 'add' | 'set
     await lockInventory(tx, userId)
     const [product] = await tx.select().from(products).where(and(eq(products.id, input.productId), eq(products.userId, userId))).for('update')
     if (!product) throw new UserError('No encontré ese producto.')
-    const reserved = await tx.select({ size: orderItems.size, quantity: orderItems.quantity }).from(orderItems).innerJoin(orders, eq(orders.id, orderItems.orderId))
-      .where(and(eq(orders.userId, userId), eq(orders.status, 'ready'), eq(orderItems.productId, product.id)))
     const notes = clean(input.notes) ?? (input.mode === 'add' ? 'Ingreso de stock' : 'Conteo de stock')
-    let changed = 0
-    for (const [size, value] of Object.entries(input.quantities)) {
-      if (!Number.isInteger(value) || value < 0 || value > 100_000) throw new UserError(`Revisá la cantidad${size ? ` del talle ${size}` : ''}.`)
-      if (size && !product.sizes.includes(size) && !(size in product.stockBySize)) throw new UserError(`El talle ${size} no es de este producto.`)
-      if (!size && product.sizes.length && input.mode === 'add') throw new UserError(`Elegí el talle de lo que ingresa de ${product.name}.`)
-      const current = product.stockBySize[size] ?? 0
-      const delta = input.mode === 'add' ? value : value - current
-      if (!delta) continue
-      const held = reserved.filter((row) => (row.size ?? '') === size).reduce((sum, row) => sum + row.quantity, 0)
-      if (current + delta < held) throw new UserError(`${size ? `Del talle ${size}` : 'Sin talle'} hay ${held} unidades reservadas para ventas listas: el stock no puede quedar por debajo.`)
-      await changePhysicalStock(tx, userId, product.id, size || null, delta)
-      await tx.insert(stockMovements).values({ id: crypto.randomUUID(), userId, productId: product.id, size: size || null, type: 'adjustment', quantity: delta, notes })
-      changed++
-    }
+    const changed = await setStock(tx, userId, product, input.mode, input.quantities, notes)
     if (!changed) throw new UserError(input.mode === 'add' ? 'Indicá cuántas unidades ingresan.' : 'Las cantidades son iguales a las que ya había.')
     return undefined
   }))

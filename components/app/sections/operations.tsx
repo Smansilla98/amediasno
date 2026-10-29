@@ -1,6 +1,6 @@
 'use client'
 
-import { Archive, ArchiveRestore, Boxes, CircleDollarSign, Clock, MoreHorizontal, PackageCheck, Pencil, Plus, Ruler, ShoppingBag, Shirt, Trash2, TrendingUp, Truck, Users, WalletCards } from 'lucide-react'
+import { Archive, ArchiveRestore, Boxes, CircleDollarSign, Clock, FileSpreadsheet, MoreHorizontal, PackageCheck, Pencil, Plus, Ruler, ShoppingBag, Shirt, Trash2, TrendingUp, Truck, Users, WalletCards } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { deleteCustomer } from '@/app/actions/customers'
 import { deleteProduct, setProductActive } from '@/app/actions/products'
@@ -54,12 +54,15 @@ export function Overview() {
       <Page>
         <PageHeader title={`Hola, ${user.name.split(' ')[0]}`} description="Empezá cargando lo que vendés y cuánto tenés. Después cargá tu primera venta." />
         <div className="grid gap-4 sm:grid-cols-3">
-          {[{ step: '1', title: 'Cargá tus productos', body: 'Con costo, precio, talles y el stock que ya tenés de cada talle.', action: 'Nuevo producto', run: () => open({ type: 'product' }) }, { step: '2', title: 'Vendé', body: 'Si hay stock, la entregás en el momento. Si no, queda pendiente.', action: 'Nueva venta', run: () => open({ type: 'order' }) }, { step: '3', title: 'Pedí a fábrica', body: 'Para reponer stock, para ventas pendientes o ambas cosas.', action: 'Pedido a fábrica', run: () => open({ type: 'batch' }) }].map((item) => (
+          {[{ step: '1', title: 'Cargá tus productos', body: 'Con costo, precio, talles y el stock de cada talle. Si ya los tenés en Excel o Google Sheets, importalos de una vez.', action: 'Nuevo producto', run: () => open({ type: 'product' }), extra: { label: 'Importar planilla', run: () => open({ type: 'import', kind: 'products' }) } }, { step: '2', title: 'Vendé', body: 'Si hay stock, la entregás en el momento. Si no, queda pendiente.', action: 'Nueva venta', run: () => open({ type: 'order' }) }, { step: '3', title: 'Pedí a fábrica', body: 'Para reponer stock, para ventas pendientes o ambas cosas.', action: 'Pedido a fábrica', run: () => open({ type: 'batch' }) }].map((item) => (
             <div key={item.step} className="flex flex-col rounded-2xl border border-slate-200 bg-white p-5">
               <span className="flex size-8 items-center justify-center rounded-full bg-slate-950 text-sm font-bold text-white">{item.step}</span>
               <p className="mt-4 text-base font-bold text-slate-950">{item.title}</p>
               <p className="mt-1 flex-1 text-sm text-slate-500">{item.body}</p>
-              <Button variant="secondary" className="mt-5 w-fit" onClick={item.run}>{item.action}</Button>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <Button variant="secondary" className="w-fit" onClick={item.run}>{item.action}</Button>
+                {'extra' in item && item.extra && <Button variant="secondary" className="w-fit" onClick={item.extra.run}><FileSpreadsheet className="size-4" /> {item.extra.label}</Button>}
+              </div>
             </div>
           ))}
         </div>
@@ -149,7 +152,7 @@ export function Customers() {
   )
   return (
     <Page>
-      <PageHeader title="Clientes" description="Quién te compra, cuánto y qué te debe." actions={<Button onClick={() => open({ type: 'customer' })}><Plus className="size-4" /> Nuevo cliente</Button>} />
+      <PageHeader title="Clientes" description="Quién te compra, cuánto y qué te debe." actions={<><Button variant="secondary" onClick={() => open({ type: 'import', kind: 'customers' })}><FileSpreadsheet className="size-4" /> Importar</Button><Button onClick={() => open({ type: 'customer' })}><Plus className="size-4" /> Nuevo cliente</Button></>} />
       <SearchBox value={query} onChange={setQuery} placeholder="Buscar por nombre, teléfono o email…" />
       <Card>
         <DataTable rows={rows} onRowClick={(customer) => open({ type: 'customer', id: customer.id })}
@@ -189,7 +192,7 @@ export function Catalog() {
   )
   return (
     <Page>
-      <PageHeader title="Productos" description="Lo que vendés: nombre, talles, costo y precio. El stock de cada talle se maneja en Stock." actions={<Button onClick={() => open({ type: 'product' })}><Plus className="size-4" /> Nuevo producto</Button>} />
+      <PageHeader title="Productos" description="Lo que vendés: nombre, talles, costo y precio. El stock de cada talle se maneja en Stock." actions={<><Button variant="secondary" onClick={() => open({ type: 'import', kind: 'products' })}><FileSpreadsheet className="size-4" /> Importar planilla</Button><Button onClick={() => open({ type: 'product' })}><Plus className="size-4" /> Nuevo producto</Button></>} />
       <div className="grid grid-cols-3 gap-3">
         <Stat label="Productos" value={active.length} icon={Shirt} />
         <Stat label="Disponibles" value={`${active.reduce((sum, product) => sum + product.availableStock, 0)} u.`} icon={Boxes} tone="emerald" onClick={() => go('stock')} />
@@ -208,7 +211,7 @@ export function Catalog() {
             { header: '', align: 'right', cell: menu },
           ]}
           card={(product) => <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{product.name}</p><p className="mt-0.5 truncate text-xs text-slate-500">{[product.category, product.color, product.sizes.join(' / ')].filter(Boolean).join(' · ')}</p><p className="mt-1.5 text-xs text-slate-600">Disponibles <strong>{product.availableStock}</strong>{product.reservedStock > 0 && <> · reservadas {product.reservedStock}</>}{product.requestedStock > 0 && <> · en camino <strong className="text-amber-700">{product.requestedStock}</strong></>}</p></div><div className="shrink-0 text-right"><p className="text-sm font-bold tabular-nums text-slate-900">{money(product.priceCents)}</p>{product.marginPct !== null && <p className="text-xs text-slate-500">{product.marginPct}% margen</p>}</div></div>}
-          empty={view.products.length ? <EmptyState icon={Shirt} title="Ningún producto coincide" /> : <EmptyState icon={Shirt} title="Todavía no hay productos" action={<Button onClick={() => open({ type: 'product' })}><Plus className="size-4" /> Cargar un producto</Button>}>Cargá lo que vendés con su costo, precio, talles y stock.</EmptyState>} />
+          empty={view.products.length ? <EmptyState icon={Shirt} title="Ningún producto coincide" /> : <EmptyState icon={Shirt} title="Todavía no hay productos" action={<div className="flex flex-wrap justify-center gap-2"><Button onClick={() => open({ type: 'import', kind: 'products' })}><FileSpreadsheet className="size-4" /> Importar desde Excel</Button><Button variant="secondary" onClick={() => open({ type: 'product' })}><Plus className="size-4" /> Cargar uno</Button></div>}>Cargá lo que vendés con su costo, precio, talles y stock. Si ya lo tenés en una planilla, importala de una vez.</EmptyState>} />
       </Card>
     </Page>
   )
