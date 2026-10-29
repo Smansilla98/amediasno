@@ -12,6 +12,6 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Todo menos la API de sesión, los archivos estáticos y las imágenes públicas.
-  matcher: ['/((?!api/auth|_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|ico|webp)$).*)'],
+  // Todo menos la API de sesión, el healthcheck, los archivos estáticos y las imágenes públicas.
+  matcher: ['/((?!api/auth|api/health|_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|ico|webp)$).*)'],
 }

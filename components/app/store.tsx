@@ -15,10 +15,10 @@ export type ModalState =
   | { type: 'payment'; orderId: string }
   | { type: 'customer'; id?: string }
   | { type: 'product'; id?: string }
-  | { type: 'stock'; id: string }
+  | { type: 'stock'; id: string; mode?: 'add' | 'set' }
   | { type: 'sizeChart'; id: string }
   | { type: 'supplier'; id?: string }
-  | { type: 'batch'; id?: string }
+  | { type: 'batch'; id?: string; orderIds?: string[] }
   | { type: 'batchDetail'; id: string }
   | { type: 'account'; id?: string }
   | { type: 'expense'; batchId?: string }

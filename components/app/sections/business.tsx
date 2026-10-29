@@ -18,30 +18,30 @@ const iconButton = 'flex size-8 items-center justify-center rounded-lg text-slat
 
 export function Batches() {
   const { view, open } = useApp()
-  const waiting = view.orders.filter((order) => order.status === 'pending' && (!order.batch || order.batch.status === 'received') && order.items.length > 0)
+  const waiting = view.orders.filter((order) => order.status === 'pending' && order.items.length > 0 && !view.canFulfill(order))
   const openBatches = view.batches.filter((batch) => batch.status !== 'received')
   const done = view.batches.filter((batch) => batch.status === 'received')
   const card = (batch: typeof view.batches[number]) => (
     <button key={batch.id} onClick={() => open({ type: 'batchDetail', id: batch.id })} className="flex flex-col rounded-2xl border border-slate-200 bg-white p-5 text-left outline-none transition hover:border-slate-300 hover:shadow-sm focus-visible:ring-2 focus-visible:ring-slate-950">
-      <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-base font-bold text-slate-950">{batch.name}</p><p className="mt-0.5 truncate text-sm text-slate-500">{batch.supplierName}</p></div><BatchBadge status={batch.status} /></div>
+      <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-base font-bold text-slate-950">{batch.name}</p><p className="mt-0.5 truncate text-sm text-slate-500">{batch.supplierName} · {batch.kind}</p></div><BatchBadge status={batch.status} /></div>
       <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-        {[[batch.orders.length, 'pedidos'], [batch.units, `${batch.stockUnits} para stock`], [batch.costCents ? money(batch.costCents) : '—', 'costo']].map(([value, label]) => <div key={label} className="rounded-xl bg-slate-50 px-2 py-2.5"><p className="truncate text-sm font-bold tabular-nums text-slate-950">{value}</p><p className="text-[11px] text-slate-500">{label}</p></div>)}
+        {[[batch.units, 'unidades'], [batch.orders.length, 'ventas'], [batch.costCents ? money(batch.costCents) : '—', 'costo']].map(([value, label]) => <div key={label} className="rounded-xl bg-slate-50 px-2 py-2.5"><p className="truncate text-sm font-bold tabular-nums text-slate-950">{value}</p><p className="text-[11px] text-slate-500">{label}</p></div>)}
       </div>
-      <p className="mt-3 text-xs text-slate-500">{batch.status === 'received' ? `Recibida el ${formatDate(batch.receivedAt)}` : batch.expectedAt ? `Llega el ${formatDate(batch.expectedAt)}` : `Pedida el ${formatDate(batch.requestedAt)}`}</p>
+      <p className="mt-3 text-xs text-slate-500">{batch.status === 'received' ? `Recibido el ${formatDate(batch.receivedAt)}` : batch.expectedAt ? `Llega el ${formatDate(batch.expectedAt)}` : `Pedido el ${formatDate(batch.requestedAt)}`}</p>
     </button>
   )
   return (
     <Page>
-      <PageHeader title="Tandas de fábrica" description="Compras para clientes, para stock o ambas. Vos decidís cuándo encargar." actions={<Button onClick={() => open({ type: 'batch' })}><Plus className="size-4" /> Nueva tanda</Button>} />
+      <PageHeader title="Pedidos a fábrica" description="Lo que le encargás a la fábrica: para reponer stock, para ventas pendientes o ambas cosas. Al recibirlo, entra al stock." actions={<Button onClick={() => open({ type: 'batch' })}><Plus className="size-4" /> Nuevo pedido</Button>} />
       {waiting.length > 0 && (
         <div className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-amber-900"><strong>{waiting.length} pedidos</strong> ({waiting.reduce((sum, order) => sum + order.units, 0)} unidades) están tomados. Podés cubrirlos con stock o elegir cuáles enviar a fábrica.</p>
-          <Button variant="secondary" className="shrink-0 border-amber-300" onClick={() => open({ type: 'batch' })}>Elegir pedidos</Button>
+          <p className="text-sm text-amber-900"><strong>{waiting.length} ventas pendientes</strong> ({waiting.reduce((sum, order) => sum + order.units, 0)} unidades) no tienen stock suficiente ni están encargadas.</p>
+          <Button variant="secondary" className="shrink-0 border-amber-300" onClick={() => open({ type: 'batch', orderIds: waiting.map((order) => order.id) })}>Encargarlas</Button>
         </div>
       )}
-      {view.batches.length === 0 ? <Card><EmptyState icon={Truck} title="Todavía no hay tandas" action={<Button onClick={() => open({ type: 'batch' })}><Plus className="size-4" /> Crear la primera tanda</Button>}>Una tanda junta varios pedidos en un solo encargo a la fábrica y te arma el listado por producto y talle.</EmptyState></Card> : <>
+      {view.batches.length === 0 ? <Card><EmptyState icon={Truck} title="Todavía no hay pedidos a fábrica" action={<Button onClick={() => open({ type: 'batch' })}><Plus className="size-4" /> Crear el primero</Button>}>Un pedido a fábrica junta lo que querés reponer y las ventas pendientes en un solo encargo, con el listado por producto y talle.</EmptyState></Card> : <>
         {openBatches.length > 0 && <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{openBatches.map(card)}</div>}
-        {done.length > 0 && <><h3 className="pt-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Recibidas</h3><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{done.map(card)}</div></>}
+        {done.length > 0 && <><h3 className="pt-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Recibidos</h3><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{done.map(card)}</div></>}
       </>}
     </Page>
   )
@@ -58,11 +58,11 @@ export function Suppliers() {
             { header: 'Proveedor', cell: (supplier) => <span className="flex items-center gap-2 font-semibold text-slate-900">{supplier.name}{!supplier.active && <Badge>Archivado</Badge>}</span> },
             { header: 'Contacto', cell: (supplier) => <div><span className="text-slate-600">{supplier.contact || '—'}</span><WhatsAppLink phone={supplier.contact} /></div> },
             { header: 'Fabrica', cell: (supplier) => <span className="flex flex-wrap gap-1">{supplier.categories.length ? supplier.categories.map((category) => <Badge key={category}>{category}</Badge>) : <span className="text-slate-400">—</span>}</span> },
-            { header: 'Tandas', align: 'right', cell: (supplier) => view.batches.filter((batch) => batch.supplierId === supplier.id).length },
+            { header: 'Pedidos', align: 'right', cell: (supplier) => view.batches.filter((batch) => batch.supplierId === supplier.id).length },
             { header: '', align: 'right', cell: (supplier) => <span onClick={(event) => event.stopPropagation()}><ActionMenu trigger={<button aria-label={`Acciones de ${supplier.name}`} className={iconButton}><MoreHorizontal className="size-4" /></button>} actions={[{ label: 'Editar', icon: Pencil, onSelect: () => open({ type: 'supplier', id: supplier.id }) }, { label: supplier.active ? 'Archivar' : 'Reactivar', icon: supplier.active ? Archive : ArchiveRestore, onSelect: async () => { const error = await submit(setSupplierActive(supplier.id, !supplier.active), supplier.active ? 'Proveedor archivado' : 'Proveedor reactivado'); if (error) notify(error, true) } }]} /></span> },
           ]}
           card={(supplier) => <div><p className="text-sm font-semibold text-slate-900">{supplier.name}</p><p className="mt-0.5 text-xs text-slate-500">{[supplier.contact, supplier.categories.join(', ')].filter(Boolean).join(' · ') || 'Sin datos de contacto'}</p><WhatsAppLink phone={supplier.contact} /></div>}
-          empty={<EmptyState icon={Factory} title="Todavía no hay proveedores" action={<Button onClick={() => open({ type: 'supplier' })}><Plus className="size-4" /> Cargar un proveedor</Button>}>Los vas a necesitar para armar tandas de fábrica.</EmptyState>} />
+          empty={<EmptyState icon={Factory} title="Todavía no hay proveedores" action={<Button onClick={() => open({ type: 'supplier' })}><Plus className="size-4" /> Cargar un proveedor</Button>}>Los vas a necesitar para hacer pedidos a fábrica.</EmptyState>} />
       </Card>
     </Page>
   )
@@ -208,7 +208,7 @@ export function Reports() {
   )
 }
 
-export const EXPORTS = [['pedidos', 'Pedidos'], ['clientes', 'Clientes'], ['productos', 'Catálogo'], ['pagos', 'Pagos'], ['gastos', 'Gastos'], ['caja', 'Movimientos de caja'], ['tandas', 'Tandas']] as const
+export const EXPORTS = [['pedidos', 'Ventas'], ['clientes', 'Clientes'], ['productos', 'Productos y stock'], ['pagos', 'Pagos'], ['gastos', 'Gastos'], ['caja', 'Movimientos de caja'], ['tandas', 'Pedidos a fábrica']] as const
 export const FORMATS = [['xlsx', 'Excel'], ['csv', 'CSV'], ['pdf', 'PDF'], ['json', 'JSON']] as const
 export const download = (kind: string, format: string) => { window.location.href = `/api/export/orders?tipo=${kind}&format=${format}` }
 

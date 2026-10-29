@@ -1,6 +1,6 @@
-# A medias No · gestión de pedidos
+# A medias No · ventas y stock
 
-Pedidos, pagos, stock por talle, compras a fábrica y caja. Las ventas y las compras son independientes.
+Ventas, stock por talle, pedidos a fábrica, pagos y caja.
 
 Next.js 16 (App Router) · React 19 · Tailwind 4 · Postgres con Drizzle · better-auth.
 
@@ -14,7 +14,7 @@ pnpm dev        # en otra terminal → http://localhost:3000
 
 Creá una cuenta desde `/sign-up`. Cada cuenta ve solo sus datos.
 
-Para usar otra base (Neon, por ejemplo), copiá `.env.example` a `.env.local`, completá
+Para usar otra base, copiá `.env.example` a `.env.local`, completá
 `DATABASE_URL` y corré `pnpm db:setup`: crea las tablas que falten y no toca las que ya existen.
 
 Otros comandos: `pnpm typecheck`, `pnpm build`.
@@ -27,8 +27,7 @@ Otros comandos: `pnpm typecheck`, `pnpm build`.
 - `app/actions/workspace.ts` — trae todos los datos de la cuenta de una vez. `lib/view.ts` arma con
   eso lo que muestra cada pantalla (saldos, márgenes, tandas agrupadas, series por mes).
 - `lib/inventory.ts` y `lib/stock.ts` — stock por talle, reservas de pedidos listos y
-  entregas bajo bloqueo transaccional por cuenta. Recibir una tanda ingresa mercadería;
-  entregar descuenta stock. Tomar una venta no crea un encargo a fábrica.
+  entregas bajo bloqueo transaccional por cuenta (`lib/stock.ts` tiene las reglas de estado).
 - `components/ui/modal.tsx` — la ventana modal (hoja desde abajo en el celular, centrada en
   escritorio) y `FormModal`, que maneja envío, estado y errores.
 - `components/app/` — armazón, pantallas (`sections/`) y ventanas (`forms/`).
@@ -38,51 +37,78 @@ Otros comandos: `pnpm typecheck`, `pnpm build`.
 Los importes se guardan en centavos. `toCents()` entiende `4500`, `4.500` y `4500,50`.
 
 
-## Flujos de venta, stock y fábrica
+## Cómo se usa
 
-- **Nuevo pedido → Tomar:** queda Tomado, sin enviar a fábrica. Podés decidir más adelante.
-- **Nuevo pedido → Reservar stock:** queda Listo para entregar; las unidades quedan reservadas
-  para ese cliente, pero siguen en el stock físico.
-- **Nuevo pedido → Entregar ahora:** valida producto/talle y descuenta stock al guardar.
-- En el **detalle de un pedido tomado**, si hay stock completo aparecen Reservar stock y
-  Entregar ahora. Nunca usa unidades reservadas para otra persona ni sustituye talles.
-- **Nueva tanda:** elegís explícitamente qué pedidos de clientes enviar y/o agregás líneas
-  de mercadería para stock. No hay pedidos seleccionados automáticamente. Una tanda puede
-  tener cero pedidos de clientes y solo reposición.
-- **Recibir mercadería:** ingresa tanto los productos de clientes como los adicionales.
-  Los pedidos activos quedan listos y reservados; el resto queda libre. Repetir la recepción
-  no vuelve a sumar mercadería.
-- Si querés cubrir con stock un pedido ya incluido en una tanda abierta, **quitalo de la tanda**
-  antes de entregarlo. Esto también lo elimina del listado a encargar: avisale al proveedor
-  si ya enviaste el encargo. Si la compra ya no se puede modificar, recibí la tanda antes.
-- Cancelar la venta **no cancela la compra a fábrica**: las unidades que siguen en la tanda
-  entran al stock libre cuando la recibís.
-- **Ajustar stock:** sumar/restar por talle, o Clasificar unidades sin talle hacia un talle
-  concreto sin alterar el total físico. Las reservas no se pueden restar por error.
-- WhatsApp en clientes, proveedores, detalle de pedido y detalle de tanda. Se abre `wa.me`
-  con el mensaje preparado; **no envía el mensaje automáticamente**.
+Tres cosas separadas, cada una con su alta, baja y modificación:
+
+| Pantalla | Qué es | Qué hace con el stock |
+| --- | --- | --- |
+| **Productos** | Lo que vendés: nombre, talles, costo, precio, tabla de medidas. | Al darlo de alta cargás cuántas unidades tenés de cada talle. |
+| **Stock** | Lo que tenés en mano, por talle: en mano, reservado, disponible y en camino. | **Ingreso** suma unidades; **Corregir conteo** deja cada talle en lo que contaste. |
+| **Ventas** | Lo que te compra cada cliente. | **Entregar ahora** descuenta; **Reservar** separa; **Queda pendiente** no toca nada. |
+| **Pedidos a fábrica** | Lo que le encargás a la fábrica: reposición de stock, ventas pendientes o ambas. | **Recibir mercadería** suma todo al stock y reserva las ventas del pedido. |
+
+Reglas:
+
+- **Disponible = en mano − reservado.** Una venta solo usa unidades disponibles del mismo producto y talle.
+- **Si hay stock, la venta se entrega en el momento.** El formulario lo sugiere solo cuando alcanza.
+- **Si no hay stock, la venta queda Pendiente.** Desde su detalle se encarga a fábrica, o se entrega
+  más adelante cuando entre mercadería.
+- **Una venta En fábrica se puede entregar desde stock sin esperar.** Sale del pedido a fábrica y lo
+  encargado para ella queda en ese pedido como reposición: la fábrica puede estar haciéndolo y, al
+  recibirlo, entra libre al stock.
+- **Quitar una venta del pedido a fábrica** (desde el detalle del pedido) también quita sus productos:
+  sirve para corregir un encargo antes de mandarlo.
+- **Recibir** se hace una sola vez. Si llegó algo distinto, corregilo con un conteo en Stock.
+- Mientras una venta está **Pendiente** se pueden corregir sus productos, talles y precios.
+- Un producto se puede **borrar** solo si nunca se usó; si no, se **archiva**. Un pedido a fábrica
+  se puede borrar mientras no se recibió: sus ventas vuelven a Pendiente.
+- Cancelar una venta libera su reserva (o devuelve las unidades, si ya se había entregado).
+- WhatsApp en clientes, proveedores, ventas y pedidos a fábrica: abre `wa.me` con el mensaje
+  preparado; **no lo envía solo**.
+
+### Stock «Sin talle»
+
+Instalaciones viejas guardaban stock sin talle. Aparece en Stock en amarillo («Asignale talle»).
+Con **Corregir conteo** poné 0 en «Sin talle» y la cantidad real en cada talle. No se adivina la
+distribución: eso podría entregar una prenda del talle equivocado.
+
+## Deploy en Railway
+
+1. En Railway, nuevo proyecto → **Deploy from GitHub repo** con este repositorio, y sumá un
+   servicio **PostgreSQL** al mismo proyecto.
+2. En el servicio web → **Variables**, cargá lo de [`.env.railway.example`](.env.railway.example):
+   `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `BETTER_AUTH_SECRET` (`openssl rand -hex 32`) y
+   `BETTER_AUTH_URL` con la URL pública exacta (Settings → Networking → Generate Domain).
+3. Listo: cada push a la rama configurada en Railway (Settings → Source) vuelve a desplegar.
+
+Railway usa [`railway.toml`](railway.toml) → [`Dockerfile`](Dockerfile) → [`start.sh`](start.sh), que
+espera a Postgres, aplica el esquema (idempotente, no borra datos) y arranca Next en `$PORT`.
+El healthcheck es `/api/health` (responde 200 solo si la base contesta). **Start Command** y
+**Pre-deploy Command** del dashboard deben quedar vacíos.
+
+### Pasar los datos desde Neon/Vercel
+
+Con la app vieja sin uso (para no perder ventas en el medio):
+
+```bash
+pg_dump --no-owner --no-acl "$URL_NEON" > respaldo.sql
+psql "$URL_RAILWAY" < respaldo.sql   # sobre la base de Railway vacía
+```
+
+Después desplegá: `start.sh` aplica las migraciones nuevas sobre esos datos. Las cuentas y
+contraseñas viajan en las tablas de better-auth; mantené el mismo `BETTER_AUTH_SECRET` si querés
+conservar las sesiones abiertas (si no, solo hay que volver a ingresar).
 
 ### Actualizar una instalación existente
 
-1. Hacé un respaldo de Postgres y planificá una ventana de actualización: la versión anterior
-   no mantiene las nuevas columnas de inventario.
-2. Aplicá los cambios de código y corré `pnpm db:setup` con la conexión configurada.
-   La migración agrega `products.stock_by_size`, `supplier_batches.size` y
-   `stock_movements.size`. Es idempotente; no borra pedidos, stock ni pagos.
-3. Corré `pnpm typecheck` y `pnpm build`; luego actualizá tu despliegue de Next.js.
-4. El stock que antes no tenía talle se conserva en **Sin talle / legado**. En Catálogo →
-   Ajustar stock → Clasificar, distribuí las cantidades reales en sus talles. No se adivina
-   la distribución: eso podría entregar una prenda del talle incorrecto.
-5. Revisá los pedidos que ya estaban Listos antes de actualizar: ahora cuentan como reservas.
-   Si aparece disponibilidad negativa en un talle, clasificá el stock físico existente o
-   liberá la reserva volviendo el pedido a Tomado. No se inventa stock para corregirla.
+1. Respaldo de Postgres (`pg_dump`).
+2. Desplegar. El esquema se aplica solo al arrancar (`pnpm db:setup` hace lo mismo a mano).
+   Esta versión agrega `supplier_batches.order_id` y copia como líneas los productos de las ventas
+   de tandas viejas; repetirlo no duplica nada.
+3. Revisar en Stock si quedó algo «Sin talle» y clasificarlo con un conteo.
 
-La columna `requested_stock` se conserva para compatibilidad como contador de demanda de
-clientes sin abastecer. La interfaz y las exportaciones calculan **En fábrica** desde tandas
-abiertas, incluyendo compras para stock; un pedido tomado solo no aparece como encargo.
-Los pedidos sin productos del catálogo mantienen su flujo manual, sin inventario.
-La edición de una tanda permite cambiar sus datos, no sus líneas adicionales de reposición;
-los pedidos de clientes se agregan/quitan desde el detalle mientras no esté recibida.
+`products.requested_stock` ya no se usa: «En camino» se calcula desde los pedidos a fábrica abiertos.
 
 ### Teléfonos para WhatsApp
 
@@ -92,22 +118,20 @@ Para Argentina aceptamos número con área (`11 5555 5555`), formato local con `
 
 ### Pruebas de inventario
 
-Se usa Bun solo como ejecutor de pruebas, sin cambiar el stack Next.js de la aplicación.
+Se usa Bun solo como ejecutor de pruebas (`npx bun@1` alcanza, no hace falta instalarlo).
 Prepará una base Postgres de pruebas con `DATABASE_URL=<base de pruebas> node scripts/db-setup.mjs`
 (sin `.env.local` que apunte a otra base), luego:
 
 ```bash
-TEST_DATABASE_URL='postgresql://usuario:clave@localhost:5432/base_pruebas' bun test tests/inventory.test.ts
+TEST_DATABASE_URL='postgresql://usuario:clave@localhost:5432/base_pruebas' npx bun@1 test tests/inventory.test.ts
 ```
 
 Las pruebas exigen `TEST_DATABASE_URL`; nunca usar producción. Usan un usuario sintético,
-verifican las acciones reales sobre Postgres y limpian sus datos. Cubren concurrencia,
-rollback, reservas, talles, compras sin clientes, compras mixtas, migración idempotente y WhatsApp.
+verifican las acciones reales sobre Postgres y limpian sus datos. Cubren concurrencia, rollback,
+reservas, talles, entrega desde stock de ventas en fábrica, pedidos de reposición y mixtos,
+ingreso y conteo de stock, bajas, migración idempotente y WhatsApp.
 `tests/` se excluye del typecheck/build de Next: es un runner Bun, no código de la aplicación.
 
-Con Next.js local y la base de desarrollo activos, `python tests/browser-smoke.py` realiza
-una prueba de navegador con Playwright/Chrome: registro, producto, entrega inmediata,
-WhatsApp, reposición sin pedidos, recepción y móvil. Crea datos sintéticos en desarrollo.
-
-El smoke test intercepta únicamente el endpoint de Vercel Analytics, que no se sirve en localhost.
-No reemplaza acciones, autenticación ni consultas de inventario.
+Con Next y la base de desarrollo activos, `python tests/browser-smoke.py` (Playwright) recorre en
+el navegador: producto con stock por talle, venta entregada en el momento, venta sin stock
+encargada a fábrica, pedido de reposición, recepción y vista móvil. Crea datos sintéticos.

@@ -85,3 +85,16 @@ alter table products alter column stock_by_size set not null;
 alter table supplier_batches add column if not exists size text;
 
 alter table stock_movements add column if not exists size text;
+
+-- Pedidos a fábrica: cada línea indica, si corresponde, para qué venta se encargó.
+-- Las líneas son lo que se recibe; las ventas vinculadas son solo «para quién».
+alter table supplier_batches add column if not exists order_id text;
+create index if not exists supplier_batches_batch_idx on supplier_batches (batch_id);
+-- Las tandas anteriores guardaban los productos de sus ventas solo en order_items:
+-- se copian como líneas una única vez (no se repite si la línea ya existe).
+insert into supplier_batches (id, user_id, supplier_id, batch_id, product_id, size, quantity, unit_cost_cents, ordered_at, order_id)
+select gen_random_uuid()::text, bo.user_id, pb.supplier_id, bo.batch_id, oi.product_id, oi.size, oi.quantity, oi.unit_cost_cents, bo.created_at, bo.order_id
+from batch_orders bo
+join production_batches pb on pb.id = bo.batch_id
+join order_items oi on oi.order_id = bo.order_id
+where not exists (select 1 from supplier_batches sb where sb.batch_id = bo.batch_id and sb.order_id = bo.order_id);

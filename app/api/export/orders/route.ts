@@ -22,8 +22,8 @@ function build(kind: string, w: Workspace): Sheet {
       return { title: 'Clientes', columns: ['Nombre', 'Teléfono', 'Email', 'Pedidos', 'Comprado', 'Saldo', 'Notas'], moneyColumns: [4, 5],
         rows: w.customers.map((row) => { const own = w.orders.filter((o) => o.customerId === row.id && o.status !== 'cancelled'); return [row.name, row.phone ?? '', row.email ?? '', own.length, pesos(own.reduce((s, o) => s + o.totalCents, 0)), pesos(own.reduce((s, o) => s + o.totalCents - o.paidCents, 0)), row.notes ?? ''] }) }
     case 'productos':
-      return { title: 'Catálogo', columns: ['Producto', 'Categoría', 'Color', 'Talles', 'Costo', 'Precio', 'Stock físico', 'En fábrica', 'Activo', 'Reservado', 'Disponible', 'Stock por talle'], moneyColumns: [4, 5],
-        rows: buildView(w).products.map((row) => [row.name, row.category, row.color ?? '', row.sizes.join(' / '), pesos(row.costCents), pesos(row.priceCents), row.stock, row.requestedStock, row.active ? 'Sí' : 'No', row.reservedStock, row.availableStock, row.inventory.map((item) => `${item.size || 'Sin talle'}: ${item.stock} físico / ${item.available} libre`).join('; ')]) }
+      return { title: 'Productos y stock', columns: ['Producto', 'Categoría', 'Color', 'Talles', 'Costo', 'Precio', 'En mano', 'Reservado', 'Disponible', 'En camino', 'Activo', 'Stock por talle'], moneyColumns: [4, 5],
+        rows: buildView(w).products.map((row) => [row.name, row.category, row.color ?? '', row.sizes.join(' / '), pesos(row.costCents), pesos(row.priceCents), row.stock, row.reservedStock, row.availableStock, row.requestedStock, row.active ? 'Sí' : 'No', row.inventory.map((item) => `${item.size || 'Sin talle'}: ${item.available} disp. / ${item.stock} en mano`).join('; ')]) }
     case 'pagos':
       return { title: 'Pagos', columns: ['Fecha', 'Pedido', 'Cliente', 'Importe', 'Medio', 'Notas'], moneyColumns: [3],
         rows: w.payments.map((row) => { const o = order.get(row.orderId); return [formatDate(row.paidAt), o?.code ?? '', o ? customer.get(o.customerId) ?? '' : '', pesos(row.amountCents), row.method, row.notes ?? ''] }) }
@@ -34,10 +34,10 @@ function build(kind: string, w: Workspace): Sheet {
       return { title: 'Movimientos de caja', columns: ['Fecha', 'Cuenta', 'Tipo', 'Descripción', 'Importe'], moneyColumns: [4],
         rows: w.movements.map((row) => [formatDate(row.occurredAt), account.get(row.accountId) ?? '', row.type === 'income' ? 'Ingreso' : 'Egreso', row.description, pesos(row.type === 'income' ? row.amountCents : -row.amountCents)]) }
     case 'tandas':
-      return { title: 'Tandas de fábrica', columns: ['Tanda', 'Proveedor', 'Estado', 'Pedida', 'Esperada', 'Recibida', 'Pedidos', 'Unidades', 'Para stock'],
-        rows: buildView(w).batches.map((row) => [row.name, row.supplierName, labelOf(BATCH_STATUS, row.status), formatDate(row.requestedAt), formatDate(row.expectedAt), formatDate(row.receivedAt), row.orders.length, row.units, row.stockUnits]) }
+      return { title: 'Pedidos a fábrica', columns: ['Pedido', 'Proveedor', 'Tipo', 'Estado', 'Pedido el', 'Esperado', 'Recibido', 'Ventas', 'Unidades', 'Para stock', 'Detalle'],
+        rows: buildView(w).batches.map((row) => [row.name, row.supplierName, row.kind, labelOf(BATCH_STATUS, row.status), formatDate(row.requestedAt), formatDate(row.expectedAt), formatDate(row.receivedAt), row.orders.length, row.units, row.stockUnits, row.lines.map((line) => `${line.quantity}× ${line.name}${line.size ? ` (${line.size})` : ''}`).join('; ')]) }
     default:
-      return { title: 'Pedidos', columns: ['Código', 'Fecha', 'Cliente', 'Para', 'Productos', 'Bloque', 'Profesor/a', 'Sede', 'Estado', 'Pago', 'Total', 'Pagado', 'Saldo', 'Entrega', 'Notas'], moneyColumns: [10, 11, 12],
+      return { title: 'Ventas', columns: ['Código', 'Fecha', 'Cliente', 'Para', 'Productos', 'Bloque', 'Profesor/a', 'Sede', 'Estado', 'Pago', 'Total', 'Pagado', 'Saldo', 'Entrega', 'Notas'], moneyColumns: [10, 11, 12],
         rows: w.orders.map((row) => [row.code, formatDate(row.createdAt), customer.get(row.customerId) ?? '', fullName(row.firstName, row.lastName),
           w.items.filter((item) => item.orderId === row.id).map((item) => `${item.quantity}× ${product.get(item.productId)?.name ?? 'Producto'}${item.size ? ` (${item.size})` : ''}`).join('; ') || (row.size ?? ''),
           row.block ?? '', row.professor ?? '', row.venue ?? '', labelOf(ORDER_STATUS, row.status), labelOf(PAYMENT_STATUS, row.paymentStatus), pesos(row.totalCents), pesos(row.paidCents), pesos(row.totalCents - row.paidCents), formatDate(row.deliveryDate), row.notes ?? '']) }

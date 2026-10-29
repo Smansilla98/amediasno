@@ -1,11 +1,17 @@
 // Vocabulario compartido entre el servidor y la interfaz.
 
+/**
+ * Estados de una venta. Las claves no cambian (están en la base); los textos sí.
+ * - pending: falta mercadería, no hay nada reservado.
+ * - in_production: incluida en un pedido a fábrica abierto.
+ * - ready: las unidades están reservadas en stock para esta venta.
+ */
 export const ORDER_STATUS = {
-  pending: 'Tomado',
+  pending: 'Pendiente',
   in_production: 'En fábrica',
-  ready: 'Listo para entregar',
-  delivered: 'Entregado',
-  cancelled: 'Cancelado',
+  ready: 'Lista para entregar',
+  delivered: 'Entregada',
+  cancelled: 'Cancelada',
 } as const
 export type OrderStatus = keyof typeof ORDER_STATUS
 export const ORDER_FLOW: OrderStatus[] = ['pending', 'in_production', 'ready', 'delivered']
@@ -15,7 +21,7 @@ export type PaymentStatus = keyof typeof PAYMENT_STATUS
 
 export const PAYMENT_METHODS = ['Efectivo', 'Transferencia', 'Mercado Pago', 'Tarjeta', 'Otro'] as const
 
-export const BATCH_STATUS = { requested: 'Pedida', in_production: 'En producción', received: 'Recibida' } as const
+export const BATCH_STATUS = { requested: 'Encargado', in_production: 'En producción', received: 'Recibido' } as const
 export type BatchStatus = keyof typeof BATCH_STATUS
 
 export const EXPENSE_CATEGORIES = { factory: 'Fábrica', shipping: 'Envíos', supplies: 'Insumos', services: 'Servicios', other: 'Otros' } as const

@@ -3,7 +3,7 @@ import type { Tx } from '@/lib/db'
 import { products } from '@/lib/db/schema'
 import { UserError } from '@/lib/session'
 
-/** Serializa operaciones de stock/pedidos/tandas de una cuenta, incluso entre procesos. */
+/** Serializa operaciones de stock, ventas y pedidos a fábrica de una cuenta, incluso entre procesos. */
 export async function lockInventory(tx: Tx, userId: string) {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${userId}))`)
 }

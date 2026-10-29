@@ -2,13 +2,13 @@
 
 import { asc, desc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { batchOrders, cashAccounts, cashMovements, customers, expenses, orderItems, orders, payments, productionBatches, products, suppliers, supplierBatches } from '@/lib/db/schema'
+import { batchOrders, cashAccounts, cashMovements, customers, expenses, orderItems, orders, payments, productionBatches, products, stockMovements, suppliers, supplierBatches } from '@/lib/db/schema'
 import { requireUserId } from '@/lib/session'
 
 /** Todos los datos del negocio de quien está en sesión. La interfaz arma sus vistas a partir de esto. */
 export async function getWorkspace() {
   const userId = await requireUserId()
-  const [orderRows, itemRows, customerRows, productRows, paymentRows, expenseRows, accountRows, movementRows, supplierRows, batchRows, batchOrderRows, stockLineRows] = await Promise.all([
+  const [orderRows, itemRows, customerRows, productRows, paymentRows, expenseRows, accountRows, movementRows, supplierRows, batchRows, batchOrderRows, stockLineRows, stockMovementRows] = await Promise.all([
     db.select().from(orders).where(eq(orders.userId, userId)).orderBy(desc(orders.createdAt)),
     db.select({ item: orderItems }).from(orderItems).innerJoin(orders, eq(orderItems.orderId, orders.id)).where(eq(orders.userId, userId)),
     db.select().from(customers).where(eq(customers.userId, userId)).orderBy(customers.name),
@@ -21,6 +21,8 @@ export async function getWorkspace() {
     db.select().from(productionBatches).where(eq(productionBatches.userId, userId)).orderBy(desc(productionBatches.requestedAt)),
     db.select().from(batchOrders).where(eq(batchOrders.userId, userId)).orderBy(asc(batchOrders.createdAt)),
     db.select().from(supplierBatches).where(eq(supplierBatches.userId, userId)),
+    // Historial reciente: alcanza para revisar qué pasó con el stock sin traer años de movimientos.
+    db.select().from(stockMovements).where(eq(stockMovements.userId, userId)).orderBy(desc(stockMovements.createdAt)).limit(300),
   ])
   return {
     orders: orderRows,
@@ -35,6 +37,7 @@ export async function getWorkspace() {
     batches: batchRows,
     batchOrders: batchOrderRows,
     stockLines: stockLineRows,
+    stockMovements: stockMovementRows.filter((row) => row.type !== 'requested'),
   }
 }
 

@@ -18,8 +18,9 @@ const { db, pool } = await import('@/lib/db')
 const schema = await import('@/lib/db/schema')
 const { products, customers, orders, suppliers } = schema
 const { createOrder, setOrderStatus } = await import('@/app/actions/orders')
-const { saveProduct, adjustStock, classifyStock } = await import('@/app/actions/products')
-const { saveBatch, receiveBatch, removeOrderFromBatch, assignOrdersToBatch } = await import('@/app/actions/production')
+const { saveProduct, updateStock, deleteProduct } = await import('@/app/actions/products')
+const { saveBatch, receiveBatch, removeOrderFromBatch, assignOrdersToBatch, deleteBatch } = await import('@/app/actions/production')
+const { updateOrder } = await import('@/app/actions/orders')
 const { buildView } = await import('@/lib/view')
 const { whatsappUrl } = await import('@/lib/whatsapp')
 
@@ -117,17 +118,53 @@ describe('Flujos de inventario (Postgres real)', () => {
       await client.query("update products set stock_by_size='{" + '"M":7' + "}'::jsonb where id='legacy'")
       await client.query(sql)
       expect((await client.query("select stock, stock_by_size from products where id='legacy'")).rows[0]).toEqual({ stock: 7, stock_by_size: { M: 7 } })
+      // Las tandas viejas guardaban sus productos solo en la venta: se copian como líneas una sola vez.
+      await client.query("insert into production_batches (id, user_id, supplier_id, name) values ('b1', 'legacy', 's1', 'Tanda vieja')")
+      await client.query("insert into batch_orders (id, user_id, batch_id, order_id) values ('bo1', 'legacy', 'b1', 'o1')")
+      await client.query("insert into order_items (id, order_id, product_id, size, quantity, unit_price_cents, unit_cost_cents) values ('i1', 'o1', 'legacy', 'M', 2, 100, 50)")
+      await client.query(sql)
+      await client.query(sql)
+      expect((await client.query("select order_id, quantity, unit_cost_cents from supplier_batches where batch_id='b1'")).rows).toEqual([{ order_id: 'o1', quantity: 2, unit_cost_cents: 50 }])
     } finally { await client.query('rollback'); client.release() }
   })
-  test('Tanda mixta reserva clientes y deja reposición libre', async () => {
-    const first = await order(2)
+  test('Pedido mixto reserva la venta al recibir y deja la reposición libre', async () => {
+    const first = await order(4)
     const row = await batch({ orderIds: [first.id], stockItems: [{ productId, size: 'M', quantity: 5 }] })
     expect(await state(first.id)).toBe('in_production')
+    // Hay 3 M y la venta necesita 4: todavía no se puede entregar.
     expect((await setOrderStatus(first.id, 'delivered')).ok).toBe(false)
     expect((await receiveBatch(row.id)).ok).toBe(true)
-    expect(await state(first.id)).toBe('ready'); expect((await stock()).stockBySize.M).toBe(10)
+    expect(await state(first.id)).toBe('ready'); expect((await stock()).stockBySize.M).toBe(12)
     expect((await setOrderStatus(first.id, 'delivered')).ok).toBe(true)
     expect((await stock()).stockBySize.M).toBe(8)
+  })
+  test('Venta en fábrica se entrega desde stock sin esperar; lo encargado queda como reposición', async () => {
+    const first = await order(2)
+    const row = await batch({ orderIds: [first.id] })
+    expect(await state(first.id)).toBe('in_production')
+    expect((await setOrderStatus(first.id, 'delivered')).ok).toBe(true)
+    expect((await stock()).stockBySize.M).toBe(1)
+    expect(await db.select().from(schema.batchOrders).where(eq(schema.batchOrders.orderId, first.id))).toHaveLength(0)
+    const lines = await db.select().from(schema.supplierBatches).where(eq(schema.supplierBatches.batchId, row.id))
+    expect(lines).toHaveLength(1); expect(lines[0]).toMatchObject({ quantity: 2, orderId: null })
+    expect((await receiveBatch(row.id))).toMatchObject({ ok: true, data: { orders: 0, units: 2 } })
+    expect((await stock()).stockBySize.M).toBe(3)
+    expect(await state(first.id)).toBe('delivered')
+  })
+  test('Borrar un pedido a fábrica devuelve sus ventas a pendientes', async () => {
+    const first = await order(2)
+    const row = await batch({ orderIds: [first.id], stockItems: [{ productId, size: 'L', quantity: 1 }] })
+    expect((await deleteBatch(row.id)).ok).toBe(true)
+    expect(await state(first.id)).toBe('pending')
+    expect(await db.select().from(schema.supplierBatches).where(eq(schema.supplierBatches.batchId, row.id))).toHaveLength(0)
+    expect((await stock()).stock).toBe(5)
+  })
+  test('Una venta pendiente permite corregir talle y cantidad', async () => {
+    const first = await order(1, 'M')
+    expect((await updateOrder({ id: first.id, firstName: 'Ana', items: [{ productId, size: 'L', quantity: 2 }] })).ok).toBe(true)
+    expect((await setOrderStatus(first.id, 'delivered')).ok).toBe(true)
+    expect((await stock()).stockBySize).toEqual({ M: 3, L: 0 })
+    expect((await updateOrder({ id: first.id, firstName: 'Ana', items: [{ productId, size: 'M', quantity: 1 }] })).ok).toBe(false)
   })
   test('Pedido tomado previamente se entrega desde reposición independiente', async () => {
     const first = await order(5)
@@ -160,16 +197,28 @@ describe('Flujos de inventario (Postgres real)', () => {
     expect(results.filter((row) => row.ok)).toHaveLength(1)
     expect((await stock()).stockBySize.M).toBe(1)
   })
-  test('Ajuste no puede quitar stock reservado', async () => {
+  test('Conteo no puede quitar stock reservado', async () => {
     await order(3, 'M', 'ready')
-    expect((await adjustStock({ productId, size: 'M', delta: -1 })).ok).toBe(false)
+    expect((await updateStock({ productId, mode: 'set', quantities: { M: 2 } })).ok).toBe(false)
     expect((await stock()).stock).toBe(5)
   })
-  test('Clasificar stock legado transfiere talle sin cambiar total', async () => {
+  test('Ingreso suma por talle y exige talle si el producto los tiene', async () => {
+    expect((await updateStock({ productId, mode: 'add', quantities: { M: 2, L: 1 } })).ok).toBe(true)
+    expect((await stock()).stockBySize).toEqual({ M: 5, L: 3 })
+    expect((await updateStock({ productId, mode: 'add', quantities: { '': 2 } })).ok).toBe(false)
+  })
+  test('Conteo pasa stock legado a su talle sin cambiar el total', async () => {
     await db.update(products).set({ stock: 5, stockBySize: { '': 5 } }).where(eq(products.id, productId))
-    expect((await classifyStock({ productId, size: 'M', quantity: 3 })).ok).toBe(true)
+    expect((await updateStock({ productId, mode: 'set', quantities: { '': 2, M: 3 } })).ok).toBe(true)
     expect((await stock()).stockBySize).toEqual({ '': 2, M: 3 })
     expect((await stock()).stock).toBe(5)
+  })
+  test('Solo se borra un producto sin ventas', async () => {
+    await order(1)
+    expect((await deleteProduct(productId)).ok).toBe(false)
+    const other = await saveProduct({ name: 'Sin uso', sizes: [], costCents: 0, priceCents: 100, initialStock: { '': 3 } })
+    if (!other.ok) throw new Error(other.error)
+    expect((await deleteProduct(other.data.id)).ok).toBe(true)
   })
   test('Validaciones fallidas hacen rollback completo', async () => {
     const count = (await db.select().from(orders).where(eq(orders.userId, userId))).length
@@ -189,11 +238,11 @@ describe('Flujos de inventario (Postgres real)', () => {
     expect(result.ok).toBe(false); expect((await stock()).stock).toBe(5)
   })
   test('Inicializar stock por talle y rechazar talles inválidos', async () => {
-    const result = await saveProduct({ name: 'Otra', sizes: ['M'], costCents: 0, priceCents: 100, stock: 2, stockSize: 'M' })
+    const result = await saveProduct({ name: 'Otra', sizes: ['M'], costCents: 0, priceCents: 100, initialStock: { M: 2 } })
     expect(result).toMatchObject({ ok: true, data: { stockBySize: { M: 2 } } })
     expect((await createOrder({ customerId, items: [{ productId, size: 'XXL', quantity: 1 }] })).ok).toBe(false)
   })
-  test('Vista calcula fábrica solo con tandas, no con pedidos tomados', async () => {
+  test('Vista calcula «en camino» solo con pedidos a fábrica, no con ventas pendientes', async () => {
     const first = await order(2)
     await order(1, 'L', 'ready')
     const row = await batch({ stockItems: [{ productId, size: 'L', quantity: 3 }] })
@@ -202,7 +251,7 @@ describe('Flujos de inventario (Postgres real)', () => {
       items: (await db.select({ item: schema.orderItems }).from(schema.orderItems).innerJoin(orders, eq(orders.id, schema.orderItems.orderId)).where(eq(orders.userId, userId))).map((r) => r.item),
       products: [await stock()], customers: [], suppliers: [], batches: await db.select().from(schema.productionBatches).where(eq(schema.productionBatches.userId, userId)),
       stockLines: await db.select().from(schema.supplierBatches).where(eq(schema.supplierBatches.userId, userId)),
-      payments: [], expenses: [], accounts: [], movements: [], batchOrders: [],
+      payments: [], expenses: [], accounts: [], movements: [], batchOrders: [], stockMovements: [],
     }
     const view = buildView(w)
     expect(view.products[0]).toMatchObject({ stock: 5, availableStock: 4, reservedStock: 1, requestedStock: 3 })

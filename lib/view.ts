@@ -47,13 +47,18 @@ export function buildView(w: Workspace) {
   })
 
   const reservedItems = orders.filter((order) => order.status === 'ready').flatMap((order) => order.items)
+  const openLines = w.stockLines.filter((line) => batchById.get(line.batchId)?.status !== 'received')
+  const sum = <T,>(rows: T[], pick: (row: T) => number) => rows.reduce((total, row) => total + pick(row), 0)
+  const sameSize = (a: string | null | undefined, b: string | null | undefined) => (a ?? '') === (b ?? '')
   const availableFor = (productId: string, size: string | null, excludeOrderId?: string) => {
     const product = productById.get(productId)
-    const held = reservedItems.filter((item) => item.productId === productId && (item.size ?? '') === (size ?? '') && item.orderId !== excludeOrderId).reduce((sum, item) => sum + item.quantity, 0)
+    const held = sum(reservedItems.filter((item) => item.productId === productId && sameSize(item.size, size) && item.orderId !== excludeOrderId), (item) => item.quantity)
     return (product?.stockBySize[size ?? ''] ?? 0) - held
   }
+  /** Alcanza el stock libre para reservar o entregar toda la venta. */
   const canFulfill = (order: typeof orders[number]) => {
-    if (!order.items.length || !['pending', 'ready'].includes(order.status) || (order.batch && order.batch.status !== 'received')) return false
+    if (!order.items.length || !['pending', 'in_production', 'ready'].includes(order.status)) return false
+    if (order.status === 'ready') return true
     const quantities = new Map<string, number>()
     for (const item of order.items) {
       const key = `${item.productId}|${item.size ?? ''}`
@@ -63,22 +68,36 @@ export function buildView(w: Workspace) {
     }
     return true
   }
+  const pendingItems = live.filter((order) => order.status === 'pending').flatMap((order) => order.items)
   const products = w.products.map((product) => {
     const sold = live.flatMap((order) => order.items).filter((item) => item.productId === product.id)
-    const revenueCents = sold.reduce((s, item) => s + item.unitPriceCents * item.quantity, 0)
-    const costCents = sold.reduce((s, item) => s + item.unitCostCents * item.quantity, 0)
+    const revenueCents = sum(sold, (item) => item.unitPriceCents * item.quantity)
+    const costCents = sum(sold, (item) => item.unitCostCents * item.quantity)
+    // Talles del producto más cualquier talle viejo que todavía tenga stock (por ejemplo «sin talle»).
+    const sizes = [...new Set([...product.sizes, ...Object.keys(product.stockBySize).filter((size) => (product.stockBySize[size] ?? 0) !== 0 || !product.sizes.length)])]
+    const inventory = (sizes.length ? sizes : ['']).map((size) => {
+      const stock = product.stockBySize[size] ?? 0
+      const reserved = sum(reservedItems.filter((item) => item.productId === product.id && sameSize(item.size, size)), (item) => item.quantity)
+      return {
+        size, stock, reserved, available: stock - reserved,
+        incoming: sum(openLines.filter((line) => line.productId === product.id && sameSize(line.size, size)), (line) => line.quantity),
+        waiting: sum(pendingItems.filter((item) => item.productId === product.id && sameSize(item.size, size)), (item) => item.quantity),
+        legacy: size === '' && product.sizes.length > 0,
+      }
+    })
     return {
       ...product,
-      reservedStock: reservedItems.filter((item) => item.productId === product.id).reduce((sum, item) => sum + item.quantity, 0),
-      availableStock: Object.keys(product.stockBySize).reduce((sum, size) => sum + Math.max(0, availableFor(product.id, size)), 0),
-      inventory: [...new Set([...product.sizes, ...Object.keys(product.stockBySize)])].map((size) => ({ size, stock: product.stockBySize[size] ?? 0, available: availableFor(product.id, size), reserved: reservedItems.filter((item) => item.productId === product.id && (item.size ?? '') === size).reduce((sum, item) => sum + item.quantity, 0) })),
-      requestedStock: w.items.filter((item) => item.productId === product.id && w.batchOrders.some((link) => link.orderId === item.orderId && batchById.get(link.batchId)?.status !== 'received')).reduce((sum, item) => sum + item.quantity, 0) + w.stockLines.filter((item) => item.productId === product.id && batchById.get(item.batchId)?.status !== 'received').reduce((sum, item) => sum + item.quantity, 0),
-      soldUnits: sold.reduce((s, item) => s + item.quantity, 0),
+      inventory,
+      reservedStock: sum(inventory, (row) => row.reserved),
+      availableStock: sum(inventory, (row) => Math.max(0, row.available)),
+      /** Unidades en pedidos a fábrica que todavía no llegaron. */
+      requestedStock: sum(inventory, (row) => row.incoming),
+      /** Unidades de ventas pendientes: ni reservadas ni encargadas. */
+      unbatchedUnits: sum(inventory, (row) => row.waiting),
+      soldUnits: sum(sold, (item) => item.quantity),
       revenueCents,
       profitCents: revenueCents - costCents,
       marginPct: product.priceCents > 0 ? Math.round(((product.priceCents - product.costCents) / product.priceCents) * 100) : null,
-      // Lo que falta pedirle a la fábrica: unidades de pedidos tomados que todavía no entraron en ninguna tanda.
-      unbatchedUnits: live.filter((order) => order.status === 'pending' && (!order.batch || order.batch.status === 'received')).flatMap((order) => order.items).filter((item) => item.productId === product.id).reduce((s, item) => s + item.quantity, 0),
     }
   })
 
@@ -92,25 +111,37 @@ export function buildView(w: Workspace) {
   const batches = w.batches.map((batch) => {
     const included = new Set(w.batchOrders.filter((link) => link.batchId === batch.id).map((link) => link.orderId))
     const own = orders.filter((order) => included.has(order.id))
-    const lines = new Map<string, { name: string; size: string | null; quantity: number; costCents: number }>()
-    for (const item of own.flatMap((order) => order.items)) {
-      const key = `${item.productId}|${item.size ?? ''}`
-      const current = lines.get(key) ?? { name: `${item.name}${item.color ? ` · ${item.color}` : ''}`, size: item.size, quantity: 0, costCents: 0 }
-      current.quantity += item.quantity
-      current.costCents += item.unitCostCents * item.quantity
-      lines.set(key, current)
-    }
-    const extra = w.stockLines.filter((item) => item.batchId === batch.id)
-    for (const item of extra) {
+    const raw = w.stockLines.filter((line) => line.batchId === batch.id)
+    // Lo que se le pide a la fábrica, agrupado por producto y talle.
+    const lines = new Map<string, { productId: string; name: string; size: string | null; quantity: number; costCents: number }>()
+    for (const item of raw) {
       const product = productById.get(item.productId)
       const key = `${item.productId}|${item.size ?? ''}`
-      const current = lines.get(key) ?? { name: product ? `${product.name}${product.color ? ` · ${product.color}` : ''}` : 'Producto eliminado', size: item.size, quantity: 0, costCents: 0 }
+      const current = lines.get(key) ?? { productId: item.productId, name: product ? `${product.name}${product.color ? ` · ${product.color}` : ''}` : 'Producto eliminado', size: item.size, quantity: 0, costCents: 0 }
       current.quantity += item.quantity
       current.costCents += item.unitCostCents * item.quantity
       lines.set(key, current)
     }
     const summary = [...lines.values()].sort((a, b) => a.name.localeCompare(b.name) || (a.size ?? '').localeCompare(b.size ?? ''))
-    return { ...batch, stockUnits: extra.reduce((sum, item) => sum + item.quantity, 0), supplierContact: supplierById.get(batch.supplierId)?.contact ?? null, supplierName: supplierById.get(batch.supplierId)?.name ?? 'Proveedor eliminado', orders: own, lines: summary, units: summary.reduce((s, l) => s + l.quantity, 0), costCents: summary.reduce((s, l) => s + l.costCents, 0) }
+    const stockItems = raw.filter((line) => !line.orderId)
+    const stockUnits = sum(stockItems, (line) => line.quantity)
+    return {
+      ...batch,
+      kind: own.length && stockUnits ? 'Ventas y reposición' : own.length ? 'Para ventas' : 'Reposición de stock',
+      stockItems, stockUnits,
+      supplierContact: supplierById.get(batch.supplierId)?.contact ?? null,
+      supplierName: supplierById.get(batch.supplierId)?.name ?? 'Proveedor eliminado',
+      orders: own, lines: summary,
+      units: sum(summary, (line) => line.quantity),
+      costCents: sum(summary, (line) => line.costCents),
+    }
+  })
+
+  const stockMovements = w.stockMovements.map((movement) => {
+    const product = productById.get(movement.productId)
+    // Entregas guardan la cantidad en positivo: el signo sale del tipo.
+    const signed = movement.type === 'delivered' ? -Math.abs(movement.quantity) : movement.type === 'received' || movement.type === 'returned' ? Math.abs(movement.quantity) : movement.quantity
+    return { ...movement, signed, productName: product ? `${product.name}${product.color ? ` · ${product.color}` : ''}` : 'Producto eliminado' }
   })
 
   const payments = w.payments.map((payment) => {
@@ -141,13 +172,17 @@ export function buildView(w: Workspace) {
     receivableCents: live.reduce((s, o) => s + o.balanceCents, 0),
     owing: live.filter((o) => o.balanceCents > 0).length,
     open: live.filter((o) => o.status !== 'delivered').length,
-    unbatched: live.filter((o) => o.status === 'pending' && (!o.batch || o.batch.status === 'received') && o.items.length > 0).length,
+    /** Ventas pendientes que no alcanza el stock: hay que encargarlas. */
+    unbatched: live.filter((o) => o.status === 'pending' && o.items.length > 0 && !canFulfill(o)).length,
+    /** Ventas pendientes o en fábrica que ya se pueden entregar con lo que hay. */
+    deliverable: live.filter((o) => (o.status === 'pending' || o.status === 'in_production') && canFulfill(o)).length,
+    incomingUnits: openLines.reduce((s, l) => s + l.quantity, 0),
     ready: live.filter((o) => o.status === 'ready').length,
     cashCents: accounts.filter((a) => a.active).reduce((s, a) => s + a.balanceCents, 0),
     expensesCents: w.expenses.reduce((s, e) => s + e.amountCents, 0),
   }
 
-  return { availableFor, canFulfill, orders, orderById, customers, customerById, products, productById, suppliers: w.suppliers, supplierById, accounts, accountById, batches, payments, expenses: w.expenses, movements: w.movements, months, month: months[5], previousMonth: months[4], totals }
+  return { availableFor, canFulfill, orders, orderById, customers, customerById, products, productById, suppliers: w.suppliers, supplierById, accounts, accountById, batches, stockMovements, payments, expenses: w.expenses, movements: w.movements, months, month: months[5], previousMonth: months[4], totals }
 }
 
 export type View = ReturnType<typeof buildView>

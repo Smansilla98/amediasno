@@ -1,13 +1,16 @@
 'use client'
 
 import Image from 'next/image'
-import { BarChart3, Download, Factory, Landmark, LayoutDashboard, LoaderCircle, Menu as MenuIcon, Plus, Receipt, Shirt, ShoppingBag, Truck, UserRound, Users, WalletCards, type LucideIcon } from 'lucide-react'
+import { BarChart3, Boxes, Download, Factory, Landmark, LayoutDashboard, LoaderCircle, Menu as MenuIcon, Plus, Receipt, Shirt, ShoppingBag, Truck, UserRound, Users, WalletCards, type LucideIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import type { Workspace } from '@/app/actions/workspace'
-import { AccountForm, BatchDetail, BatchForm, CustomerForm, ExpenseForm, MovementForm, ProductForm, SizeChartModal, StockForm, SupplierForm } from '@/components/app/forms/other-modals'
+import { BatchDetail, BatchForm } from '@/components/app/forms/factory-modals'
+import { AccountForm, CustomerForm, ExpenseForm, MovementForm, ProductForm, SizeChartModal, SupplierForm } from '@/components/app/forms/other-modals'
+import { StockForm } from '@/components/app/forms/stock-modals'
 import { OrderDetail, OrderEditForm, OrderForm, PaymentForm } from '@/components/app/forms/order-modals'
 import { Account, Batches, Cash, EXPORTS, FORMATS, Payments, Reports, Suppliers, download } from '@/components/app/sections/business'
 import { Catalog, Customers, Orders, Overview } from '@/components/app/sections/operations'
+import { Stock } from '@/components/app/sections/stock'
 import { AppProvider, useApp, type ModalState } from '@/components/app/store'
 import { ActionMenu, Button } from '@/components/ui/controls'
 import { ConfirmModal, Modal } from '@/components/ui/modal'
@@ -16,13 +19,15 @@ import { cn } from '@/lib/utils'
 
 type Section = { id: string; label: string; icon: LucideIcon; group: string; view: () => React.ReactNode; exports?: string }
 
+// Los id se mantienen (son los ?v= de la URL); cambian solo los nombres.
 const SECTIONS: Section[] = [
   { id: 'resumen', label: 'Resumen', icon: LayoutDashboard, group: 'Día a día', view: Overview, exports: 'pedidos' },
-  { id: 'pedidos', label: 'Pedidos', icon: ShoppingBag, group: 'Día a día', view: Orders, exports: 'pedidos' },
+  { id: 'pedidos', label: 'Ventas', icon: ShoppingBag, group: 'Día a día', view: Orders, exports: 'pedidos' },
   { id: 'clientes', label: 'Clientes', icon: Users, group: 'Día a día', view: Customers, exports: 'clientes' },
-  { id: 'catalogo', label: 'Catálogo', icon: Shirt, group: 'Día a día', view: Catalog, exports: 'productos' },
-  { id: 'tandas', label: 'Tandas de fábrica', icon: Truck, group: 'Producción', view: Batches, exports: 'tandas' },
-  { id: 'proveedores', label: 'Proveedores', icon: Factory, group: 'Producción', view: Suppliers },
+  { id: 'stock', label: 'Stock', icon: Boxes, group: 'Mercadería', view: Stock, exports: 'productos' },
+  { id: 'catalogo', label: 'Productos', icon: Shirt, group: 'Mercadería', view: Catalog, exports: 'productos' },
+  { id: 'tandas', label: 'Pedidos a fábrica', icon: Truck, group: 'Mercadería', view: Batches, exports: 'tandas' },
+  { id: 'proveedores', label: 'Proveedores', icon: Factory, group: 'Mercadería', view: Suppliers },
   { id: 'pagos', label: 'Pagos', icon: WalletCards, group: 'Plata', view: Payments, exports: 'pagos' },
   { id: 'caja', label: 'Caja', icon: Landmark, group: 'Plata', view: Cash, exports: 'caja' },
   { id: 'reportes', label: 'Reportes', icon: BarChart3, group: 'Plata', view: Reports },
@@ -49,7 +54,7 @@ function Shell() {
   const { section, go, view, user, open, refreshing } = useApp()
   const current = sectionOf(section)
   const View = current.view
-  const badge = (id: string) => id === 'pedidos' ? view.totals.open : id === 'tandas' ? view.totals.unbatched : id === 'pagos' ? view.totals.owing : 0
+  const badge = (id: string) => id === 'pedidos' ? view.totals.open : id === 'stock' ? view.totals.deliverable : id === 'tandas' ? view.totals.unbatched : id === 'pagos' ? view.totals.owing : 0
   const groups = [...new Set(SECTIONS.map((item) => item.group))].filter((group) => group !== 'Cuenta')
   const today = new Intl.DateTimeFormat('es-AR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date())
 
@@ -68,7 +73,7 @@ function Shell() {
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-slate-200 bg-white lg:flex">
         <div className="flex h-[68px] shrink-0 items-center gap-3 border-b border-slate-100 px-5">
           <Image src="/medias-logo.jpg" alt="" width={38} height={38} className="rounded-full object-cover" />
-          <div><p className="text-[15px] font-bold leading-tight tracking-tight">{BRAND}</p><p className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-400">Gestión de pedidos</p></div>
+          <div><p className="text-[15px] font-bold leading-tight tracking-tight">{BRAND}</p><p className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-400">Ventas y stock</p></div>
         </div>
         <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-4" aria-label="Secciones">
           {groups.map((group) => <div key={group}><p className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{group}</p><div className="space-y-0.5">{SECTIONS.filter((item) => item.group === group).map(navButton)}</div></div>)}
@@ -92,10 +97,10 @@ function Shell() {
             {current.exports && <ActionMenu label={`Descargar ${EXPORTS.find(([kind]) => kind === current.exports)?.[1].toLowerCase()}`} trigger={<Button variant="secondary" aria-label="Descargar"><Download className="size-4" /><span className="hidden sm:inline">Descargar</span></Button>} actions={FORMATS.map(([format, label]) => ({ label, onSelect: () => download(current.exports!, format) }))} />}
             <div className="hidden lg:block">
               <ActionMenu label="Cargar" trigger={<Button><Plus className="size-4" /> Nuevo</Button>} actions={[
-                { label: 'Pedido', icon: ShoppingBag, onSelect: () => open({ type: 'order' }) },
+                { label: 'Venta', icon: ShoppingBag, onSelect: () => open({ type: 'order' }) },
                 { label: 'Cliente', icon: Users, onSelect: () => open({ type: 'customer' }) },
                 { label: 'Producto', icon: Shirt, onSelect: () => open({ type: 'product' }) },
-                { label: 'Tanda de fábrica', icon: Truck, onSelect: () => open({ type: 'batch' }) },
+                { label: 'Pedido a fábrica', icon: Truck, onSelect: () => open({ type: 'batch' }) },
                 { label: 'Gasto', icon: Receipt, onSelect: () => open({ type: 'expense' }) },
               ]} />
             </div>
@@ -106,9 +111,9 @@ function Shell() {
 
       <nav aria-label="Navegación principal" className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 items-end border-t border-slate-200 bg-white/95 px-1 pb-[max(0.375rem,env(safe-area-inset-bottom))] pt-1.5 backdrop-blur lg:hidden">
         {[sectionOf('resumen'), sectionOf('pedidos')].map((item) => <MobileTab key={item.id} item={item} active={section === item.id} onClick={() => go(item.id)} />)}
-        <div className="flex justify-center"><button onClick={() => open({ type: 'order' })} aria-label="Nuevo pedido" className="-mt-5 flex size-14 items-center justify-center rounded-full bg-slate-950 text-white shadow-lg shadow-slate-950/25 outline-none transition active:scale-95 focus-visible:ring-2 focus-visible:ring-slate-950 focus-visible:ring-offset-2"><Plus className="size-6" /></button></div>
-        <MobileTab item={sectionOf('pagos')} active={section === 'pagos'} onClick={() => go('pagos')} />
-        <MobileTab item={{ ...sectionOf('cuenta'), label: 'Más', icon: MenuIcon }} active={!['resumen', 'pedidos', 'pagos'].includes(section)} onClick={() => open({ type: 'more' })} />
+        <div className="flex justify-center"><button onClick={() => open({ type: 'order' })} aria-label="Nueva venta" className="-mt-5 flex size-14 items-center justify-center rounded-full bg-slate-950 text-white shadow-lg shadow-slate-950/25 outline-none transition active:scale-95 focus-visible:ring-2 focus-visible:ring-slate-950 focus-visible:ring-offset-2"><Plus className="size-6" /></button></div>
+        <MobileTab item={sectionOf('stock')} active={section === 'stock'} onClick={() => go('stock')} />
+        <MobileTab item={{ ...sectionOf('cuenta'), label: 'Más', icon: MenuIcon }} active={!['resumen', 'pedidos', 'stock'].includes(section)} onClick={() => open({ type: 'more' })} />
       </nav>
 
       <ModalHost />
@@ -122,7 +127,7 @@ function MobileTab({ item, active, onClick }: { item: Section; active: boolean; 
 
 function MoreSheet() {
   const { close, go, section, open } = useApp()
-  const rest = SECTIONS.filter((item) => !['resumen', 'pedidos', 'pagos'].includes(item.id))
+  const rest = SECTIONS.filter((item) => !['resumen', 'pedidos', 'stock'].includes(item.id))
   return (
     <Modal open onClose={close} title="Más" size="sm">
       <div className="grid grid-cols-3 gap-2">
@@ -130,7 +135,7 @@ function MoreSheet() {
       </div>
       <h3 className="mb-2 mt-6 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Cargar</h3>
       <div className="grid grid-cols-2 gap-2">
-        {([['Cliente', Users, { type: 'customer' }], ['Producto', Shirt, { type: 'product' }], ['Tanda', Truck, { type: 'batch' }], ['Gasto', Receipt, { type: 'expense' }]] as [string, LucideIcon, ModalState][]).map(([label, Icon, modal]) => <Button key={label} variant="secondary" className="justify-start" onClick={() => { close(); open(modal) }}><Icon className="size-4" /> {label}</Button>)}
+        {([['Cliente', Users, { type: 'customer' }], ['Producto', Shirt, { type: 'product' }], ['Pedido a fábrica', Truck, { type: 'batch' }], ['Gasto', Receipt, { type: 'expense' }]] as [string, LucideIcon, ModalState][]).map(([label, Icon, modal]) => <Button key={label} variant="secondary" className="justify-start" onClick={() => { close(); open(modal) }}><Icon className="size-4" /> {label}</Button>)}
       </div>
     </Modal>
   )
@@ -149,10 +154,10 @@ function ModalView({ modal, close }: { modal: ModalState; close: () => void }) {
     case 'payment': return <PaymentForm orderId={modal.orderId} />
     case 'customer': return <CustomerForm id={modal.id} />
     case 'product': return <ProductForm id={modal.id} />
-    case 'stock': return <StockForm id={modal.id} />
+    case 'stock': return <StockForm id={modal.id} mode={modal.mode} />
     case 'sizeChart': return <SizeChartModal id={modal.id} />
     case 'supplier': return <SupplierForm id={modal.id} />
-    case 'batch': return <BatchForm id={modal.id} />
+    case 'batch': return <BatchForm id={modal.id} orderIds={modal.orderIds} />
     case 'batchDetail': return <BatchDetail id={modal.id} />
     case 'account': return <AccountForm id={modal.id} />
     case 'expense': return <ExpenseForm batchId={modal.batchId} />

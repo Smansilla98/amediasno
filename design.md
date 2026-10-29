@@ -1,5 +1,6 @@
 # Diseño
-Conservar la identidad visual del repositorio: tipografía existente, superficies blancas y slate, bordes suaves, acentos emerald para stock disponible y amber para fábrica.
-Extender formularios y detalles existentes; no rediseñar navegación ni autenticación.
-Mostrar explícitamente stock físico, reservado y disponible por talle. Venta y compra son flujos independientes.
-Acciones: tomar pedido, reservar desde stock, entregar ahora, crear tanda para clientes/stock/ambos. WhatsApp visible en escritorio y móvil.
+Conservar la identidad visual: tipografía existente, superficies blancas y slate, bordes suaves, acentos emerald para stock disponible y amber para fábrica.
+Navegación: Día a día (Resumen, Ventas, Clientes) · Mercadería (Stock, Productos, Pedidos a fábrica, Proveedores) · Plata (Pagos, Caja, Reportes).
+Mostrar siempre por talle: en mano, reservado, disponible y en camino. Venta y pedido a fábrica son independientes.
+Al vender, sugerir «Entregar ahora» si alcanza el stock; si no, «Queda pendiente». Nunca obligar a pasar por fábrica si hay stock.
+WhatsApp visible en escritorio y móvil.

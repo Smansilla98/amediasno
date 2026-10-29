@@ -37,7 +37,7 @@ export async function ownSupplier(conn: Conn, userId: string, id: string) {
 export async function lockBatch(tx: Tx, userId: string, id: string) {
   await lockInventory(tx, userId)
   const [row] = await tx.select().from(productionBatches).where(and(eq(productionBatches.id, id), eq(productionBatches.userId, userId))).for('update')
-  if (!row) throw new UserError('No encontré esa tanda.')
+  if (!row) throw new UserError('No encontré ese pedido a fábrica.')
   return row
 }
 

@@ -1,12 +1,27 @@
 'use server'
 
 import { and, eq, sql } from 'drizzle-orm'
-import { db } from '@/lib/db'
-import { cashMovements, customers, orderItems, orders, payments, products, stockMovements } from '@/lib/db/schema'
+import { db, type Tx } from '@/lib/db'
+import { cashMovements, customers, orderItems, orders, payments, products } from '@/lib/db/schema'
 import { ORDER_STATUS, PAYMENT_METHODS, paymentStatusFor, type OrderStatus } from '@/lib/domain'
 import { amount, clean, lockOrder, ownAccount, ownCustomer, required } from '@/lib/guards'
 import { run, UserError } from '@/lib/session'
 import { applyOrderStatus } from '@/lib/stock'
+
+type ItemInput = { productId: string; size?: string; quantity: number; unitPriceCents?: number }
+
+async function validateLines(tx: Tx, userId: string, items: ItemInput[]) {
+  const lines = []
+  for (const item of items) {
+    const [product] = await tx.select().from(products).where(and(eq(products.id, item.productId), eq(products.userId, userId)))
+    if (!product || !product.active) throw new UserError('Uno de los productos ya no está disponible.')
+    if (!Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 10_000) throw new UserError(`Revisá la cantidad de ${product.name}.`)
+    if (product.sizes.length && (!item.size || !product.sizes.includes(item.size))) throw new UserError(`Elegí un talle válido de ${product.name}.`)
+    const unitPriceCents = amount(item.unitPriceCents ?? product.priceCents, `Revisá el precio de ${product.name}.`, { allowZero: true })
+    lines.push({ product, size: clean(item.size), quantity: item.quantity, unitPriceCents })
+  }
+  return lines
+}
 
 const method = (value?: string) => (PAYMENT_METHODS as readonly string[]).includes(value ?? '') ? value! : 'Efectivo'
 
@@ -21,7 +36,7 @@ export type OrderInput = {
   venue?: string
   deliveryDate?: string
   notes?: string
-  items: { productId: string; size?: string; quantity: number; unitPriceCents?: number }[]
+  items: ItemInput[]
   /** Sólo cuando el pedido no lleva productos del catálogo. */
   manualTotalCents?: number
   depositCents?: number
@@ -42,15 +57,7 @@ export async function createOrder(input: OrderInput) {
         ? await ownCustomer(tx, userId, input.customerId)
         : (await tx.insert(customers).values({ id: crypto.randomUUID(), userId, name: input.newCustomer!.name.trim(), phone: clean(input.newCustomer!.phone) }).returning())[0]
 
-      const lines = []
-      for (const item of input.items) {
-        const [product] = await tx.select().from(products).where(and(eq(products.id, item.productId), eq(products.userId, userId)))
-        if (!product || !product.active) throw new UserError('Uno de los productos ya no está disponible.')
-        if (!Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 10_000) throw new UserError(`Revisá la cantidad de ${product.name}.`)
-        if (product.sizes.length && (!item.size || !product.sizes.includes(item.size))) throw new UserError(`Elegí un talle válido de ${product.name}.`)
-        const unitPriceCents = amount(item.unitPriceCents ?? product.priceCents, `Revisá el precio de ${product.name}.`, { allowZero: true })
-        lines.push({ product, size: clean(item.size), quantity: item.quantity, unitPriceCents })
-      }
+      const lines = await validateLines(tx, userId, input.items)
       const totalCents = lines.length ? lines.reduce((sum, line) => sum + line.unitPriceCents * line.quantity, 0) : amount(input.manualTotalCents ?? 0, 'Agregá al menos un producto o un total.')
       if (totalCents <= 0) throw new UserError('El total del pedido tiene que ser mayor a cero.')
       const depositCents = amount(input.depositCents ?? 0, 'Revisá la seña.', { allowZero: true })
@@ -72,12 +79,10 @@ export async function createOrder(input: OrderInput) {
 
       for (const line of lines) {
         await tx.insert(orderItems).values({ id: crypto.randomUUID(), orderId: order.id, productId: line.product.id, size: line.size, quantity: line.quantity, unitPriceCents: line.unitPriceCents, unitCostCents: line.product.costCents })
-        await tx.update(products).set({ requestedStock: sql`${products.requestedStock} + ${line.quantity}` }).where(eq(products.id, line.product.id))
-        await tx.insert(stockMovements).values({ id: crypto.randomUUID(), userId, productId: line.product.id, size: line.size, type: 'requested', quantity: line.quantity, notes: `Pedido ${order.code}` })
       }
       if (input.fulfillment && !['pending', 'ready', 'delivered'].includes(input.fulfillment)) throw new UserError('Forma de entrega inválida.')
+      // Sin productos del catálogo no hay stock que mover: se marca a mano.
       if (input.fulfillment && input.fulfillment !== 'pending') {
-        if (!lines.length) throw new UserError('Agregá productos para usar stock.')
         await applyOrderStatus(tx, order, input.fulfillment)
         order.status = input.fulfillment
       }
@@ -90,14 +95,27 @@ export async function createOrder(input: OrderInput) {
   })
 }
 
-export async function updateOrder(input: { id: string; firstName?: string; lastName?: string; block?: string; professor?: string; venue?: string; deliveryDate?: string; notes?: string }) {
+export async function updateOrder(input: { id: string; firstName?: string; lastName?: string; block?: string; professor?: string; venue?: string; deliveryDate?: string; notes?: string; items?: ItemInput[] }) {
   return run(async (userId) => db.transaction(async (tx) => {
-    await lockOrder(tx, userId, input.id)
-    await tx.update(orders).set({
-      firstName: required(input.firstName, 'Indicá para quién es el pedido.'), lastName: clean(input.lastName),
+    const order = await lockOrder(tx, userId, input.id)
+    const values: Partial<typeof orders.$inferInsert> = {
+      firstName: required(input.firstName, 'Indicá para quién es la venta.'), lastName: clean(input.lastName),
       block: clean(input.block), professor: clean(input.professor), venue: clean(input.venue),
       deliveryDate: clean(input.deliveryDate), notes: clean(input.notes),
-    }).where(eq(orders.id, input.id))
+    }
+    // Los productos solo se corrigen mientras la venta está pendiente: todavía no reservó ni se encargó nada.
+    if (input.items) {
+      if (order.status !== 'pending') throw new UserError('Solo se pueden cambiar los productos de una venta pendiente. Liberá la reserva o sacala del pedido a fábrica antes.')
+      if (!input.items.length) throw new UserError('La venta tiene que tener al menos un producto.')
+      const lines = await validateLines(tx, userId, input.items)
+      const totalCents = lines.reduce((sum, line) => sum + line.unitPriceCents * line.quantity, 0)
+      if (totalCents <= 0) throw new UserError('El total de la venta tiene que ser mayor a cero.')
+      if (totalCents < order.paidCents) throw new UserError(`Ya se cobraron ${(order.paidCents / 100).toLocaleString('es-AR')} pesos: el nuevo total no puede ser menor. Anulá pagos antes.`)
+      await tx.delete(orderItems).where(eq(orderItems.orderId, order.id))
+      for (const line of lines) await tx.insert(orderItems).values({ id: crypto.randomUUID(), orderId: order.id, productId: line.product.id, size: line.size, quantity: line.quantity, unitPriceCents: line.unitPriceCents, unitCostCents: line.product.costCents })
+      Object.assign(values, { totalCents, paymentStatus: paymentStatusFor(totalCents, order.paidCents), size: [...new Set(lines.map((line) => line.size).filter(Boolean))].join(', ') || null })
+    }
+    await tx.update(orders).set(values).where(eq(orders.id, order.id))
     return undefined
   }))
 }
@@ -123,9 +141,9 @@ export async function recordPayment(input: { orderId: string; amountCents: numbe
     }
     return db.transaction(async (tx) => {
       const order = await lockOrder(tx, userId, input.orderId)
-      if (order.status === 'cancelled') throw new UserError('El pedido está cancelado.')
+      if (order.status === 'cancelled') throw new UserError('La venta está cancelada.')
       const balance = order.totalCents - order.paidCents
-      if (cents > balance) throw new UserError(balance > 0 ? `El saldo del pedido es menor al importe ingresado.` : 'Este pedido ya está pagado.')
+      if (cents > balance) throw new UserError(balance > 0 ? `El saldo de la venta es menor al importe ingresado.` : 'Esta venta ya está pagada.')
       const paid = order.paidCents + cents
       await tx.insert(payments).values({ id: crypto.randomUUID(), userId, orderId: order.id, amountCents: cents, method: method(input.method), notes: clean(input.notes) })
       await tx.update(orders).set({ paidCents: paid, paymentStatus: paymentStatusFor(order.totalCents, paid) }).where(eq(orders.id, order.id))

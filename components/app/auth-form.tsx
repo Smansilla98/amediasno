@@ -47,7 +47,7 @@ export function AuthForm({ mode }: { mode: 'sign-in' | 'sign-up' }) {
         <div className="mb-6 flex flex-col items-center text-center">
           <Image src="/medias-logo.jpg" alt="" width={64} height={64} priority className="rounded-full object-cover shadow-sm" />
           <h1 className="mt-4 text-2xl font-bold tracking-tight text-slate-950">{signUp ? 'Creá tu cuenta' : BRAND}</h1>
-          <p className="mt-1.5 text-sm text-slate-500">{signUp ? 'Pedidos, pagos y fábrica en un solo lugar.' : 'Seguí tus pedidos, pagos y tandas de fábrica.'}</p>
+          <p className="mt-1.5 text-sm text-slate-500">{signUp ? 'Ventas, stock y fábrica en un solo lugar.' : 'Seguí tus ventas, stock y pedidos a fábrica.'}</p>
         </div>
         <form onSubmit={submit} className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           {signUp && <Field label="Tu nombre"><Input name="name" required autoComplete="name" autoFocus /></Field>}
